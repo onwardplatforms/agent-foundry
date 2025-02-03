@@ -1,0 +1,8 @@
+pyproject.toml
+setup.py
+foundry.egg-info/PKG-INFO
+foundry.egg-info/SOURCES.txt
+foundry.egg-info/dependency_links.txt
+foundry.egg-info/entry_points.txt
+foundry.egg-info/requires.txt
+foundry.egg-info/top_level.txt

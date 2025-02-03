@@ -1,0 +1,13 @@
+{
+  "name": "chat-agent-85a80371",
+  "description": "A simple chat agent powered by GPT-4",
+  "dependencies": [
+    "semantic-kernel",
+    "python-dotenv"
+  ],
+  "entry_module": "main.py",
+  "plugins": [],
+  "env_vars": [
+    "OPENAI_API_KEY"
+  ]
+}
