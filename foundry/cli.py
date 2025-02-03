@@ -6,6 +6,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from foundry.plugins.foundry_core.create_agent import AgentCreator
 from foundry.plugins.foundry_core.run_agent import AgentRunner
+from foundry.plugins.foundry_core.manage_agents import AgentManager
 
 # Load foundry's environment variables
 load_dotenv()
@@ -107,14 +108,57 @@ def run(agent_name: str):
 @cli.command()
 def list():
     """List all available agents"""
-    pass
+    manager = AgentManager()
+    agents = manager.list_agents()
+    
+    if not agents:
+        click.echo("No agents found.")
+        return
+        
+    click.echo("\nAvailable agents:")
+    click.echo("-" * 50)
+    
+    for agent in agents:
+        click.echo(f"\n{agent['name']}")
+        click.echo(f"Description: {agent['description']}")
+        
+    click.echo(f"\nTotal agents: {len(agents)}")
 
 @cli.command()
-@click.argument('agent_name')
+@click.argument('agent_name', required=False)
+@click.option('--all', 'delete_all', is_flag=True, help="Delete all agents")
 @click.option('--force/--no-force', default=False, help="Force deletion without confirmation")
-def delete(agent_name: str, force: bool):
+def delete(agent_name: Optional[str], delete_all: bool, force: bool):
     """Delete an existing agent"""
-    pass
+    manager = AgentManager()
+    
+    if delete_all:
+        if not force and not click.confirm("Are you sure you want to delete ALL agents?"):
+            click.echo("Operation cancelled.")
+            return
+            
+        deleted = manager.delete_all_agents()
+        if deleted:
+            click.echo(f"Successfully deleted {len(deleted)} agents:")
+            for name in deleted:
+                click.echo(f"  - {name}")
+        else:
+            click.echo("No agents to delete.")
+        return
+        
+    if not agent_name:
+        click.echo("Error: Please provide an agent name or use --all to delete all agents.", err=True)
+        sys.exit(1)
+        
+    if not force and not click.confirm(f"Are you sure you want to delete agent '{agent_name}'?"):
+        click.echo("Operation cancelled.")
+        return
+        
+    if manager.delete_agent(agent_name):
+        click.echo(f"Successfully deleted agent '{agent_name}'")
+    else:
+        click.echo(f"Error: Agent '{agent_name}' not found or could not be deleted.", err=True)
+        sys.exit(1)
 
 if __name__ == '__main__':
     cli() 
