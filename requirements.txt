@@ -1,3 +1,4 @@
 click
 semantic-kernel
-python-dotenv 
+python-dotenv
+-e . 
