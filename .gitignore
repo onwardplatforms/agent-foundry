@@ -23,8 +23,6 @@ wheels/
 # Virtual Environment
 venv/
 ENV/
-env/
-.env
 
 # IDE
 .idea/
@@ -34,4 +32,11 @@ env/
 
 # OS
 .DS_Store
-Thumbs.db 
+Thumbs.db
+
+# Environment variables
+.env
+
+# Agent data
+agents/
+.agents/

@@ -1,28 +1,41 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-foundry"
+version = "0.1.0"
+authors = [
+  { name="Justin O'Connor", email="justin@jcoconnor.com" },
+]
+description = "A tool for creating and managing AI agents"
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "click",
+    "semantic-kernel",
+    "python-dotenv",
+]
+
+[project.scripts]
+foundry = "agent_foundry.cli.commands:cli"
 
 [tool.black]
 line-length = 88
-target-version = ['py39']
+target-version = ['py311']
 include = '\.pyi?$'
-extend-exclude = '''
-# A regex preceded with ^/ will apply only to files and directories
-# in the root of the project.
-^/venv/
-'''
 
 [tool.isort]
 profile = "black"
 multi_line_output = 3
-line_length = 88
-include_trailing_comma = true
-force_grid_wrap = 0
-use_parentheses = true
-ensure_newline_before_comments = true
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -36,5 +49,5 @@ warn_no_return = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = "setuptools.*"
+module = "semantic_kernel.*"
 ignore_missing_imports = true
