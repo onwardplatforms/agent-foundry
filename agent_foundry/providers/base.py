@@ -1,8 +1,11 @@
-"""Provider configuration for Agent Foundry."""
+"""Base types and classes for providers."""
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, AsyncIterator, Dict, Optional, Union
+
+from semantic_kernel.contents import ChatHistory, StreamingChatMessageContent
 
 
 class ProviderType(str, Enum):
@@ -50,15 +53,7 @@ class ProviderConfig:
     def from_dict(
         cls, data: Dict[str, Any], agent_id: Optional[str] = None
     ) -> "ProviderConfig":
-        """Create a provider config from a dictionary.
-
-        Args:
-            data: Dictionary containing provider configuration
-            agent_id: Optional agent ID for environment variable handling
-
-        Returns:
-            A ProviderConfig instance
-        """
+        """Create a provider config from a dictionary."""
         return cls(
             name=ProviderType(data["name"]),
             model=data.get("model"),
@@ -67,11 +62,7 @@ class ProviderConfig:
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert provider config to a dictionary.
-
-        Returns:
-            Dictionary representation of the provider config
-        """
+        """Convert provider config to a dictionary."""
         return {
             "name": self.name.value,
             "model": self.model,
@@ -79,15 +70,11 @@ class ProviderConfig:
         }
 
     def get_settings(self) -> ProviderSettings:
-        """Get provider settings.
-
-        Returns:
-            Provider settings
-        """
+        """Get provider settings."""
         settings = self.settings or {}
         temperature = settings.get("temperature", 0.7)
 
-        provider_settings: Dict[ProviderType, Callable[[], ProviderSettings]] = {
+        provider_settings = {
             ProviderType.OPENAI: lambda: OpenAISettings(
                 temperature=temperature,
                 top_p=settings.get("top_p", 1.0),
@@ -104,23 +91,16 @@ class ProviderConfig:
         )()
 
 
-def get_provider_config(
-    config: Dict[str, Any], agent_id: Optional[str] = None
-) -> ProviderConfig:
-    """Get provider configuration from agent config.
+class Provider(ABC):
+    """Abstract base class for providers."""
 
-    Args:
-        config: Agent configuration dictionary
-        agent_id: Optional agent ID for environment variable handling
+    def __init__(self, config: ProviderConfig):
+        """Initialize the provider."""
+        self.config = config
+        self.settings: ProviderSettings = config.get_settings()
+        self.agent_id = getattr(config, "agent_id", None)
 
-    Returns:
-        Provider configuration
-
-    Raises:
-        ValueError: If provider configuration is invalid
-    """
-    provider_data = config.get("provider")
-    if not provider_data or not isinstance(provider_data, dict):
-        raise ValueError("Provider configuration is required and must be a dictionary")
-
-    return ProviderConfig.from_dict(provider_data, agent_id)
+    @abstractmethod
+    def chat(self, history: ChatHistory) -> AsyncIterator[StreamingChatMessageContent]:
+        """Process a chat message and return the response."""
+        raise NotImplementedError  # pragma: no cover

@@ -1,5 +1,0 @@
-{
-  "id": "my-agent",
-  "model": "gpt-3.5-turbo",
-  "system_prompt": "You are a helpful coding assistant who specializes in Python."
-}

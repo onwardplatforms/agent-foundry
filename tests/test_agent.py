@@ -13,8 +13,7 @@ from semantic_kernel.contents import (
 )
 
 from agent_foundry.agent import Agent
-from agent_foundry.provider_impl import Provider
-from agent_foundry.providers import ProviderConfig, ProviderType
+from agent_foundry.providers import Provider, ProviderConfig, ProviderType
 
 
 @pytest.fixture

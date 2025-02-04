@@ -7,8 +7,13 @@ from typing import AsyncIterator, Optional
 from semantic_kernel.contents import ChatHistory, StreamingChatMessageContent
 
 from agent_foundry.env import load_env_files
-from agent_foundry.provider_impl import Provider, get_provider
-from agent_foundry.providers import ProviderConfig, ProviderType, get_provider_config
+from agent_foundry.providers import (
+    Provider,
+    ProviderConfig,
+    ProviderType,
+    get_provider,
+    get_provider_config,
+)
 
 
 class Agent:

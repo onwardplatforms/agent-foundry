@@ -10,13 +10,14 @@ import requests
 from aiohttp import ClientResponse, StreamReader
 from semantic_kernel.contents import AuthorRole, ChatHistory
 
-from agent_foundry.provider_impl import OllamaProvider, OpenAIProvider
 from agent_foundry.providers import (
     OllamaSettings,
     OpenAISettings,
     ProviderConfig,
     ProviderType,
 )
+from agent_foundry.providers.ollama import OllamaProvider
+from agent_foundry.providers.openai import OpenAIProvider
 
 
 @pytest.fixture

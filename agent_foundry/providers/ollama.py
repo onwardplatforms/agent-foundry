@@ -1,16 +1,11 @@
-"""Provider implementations for Agent Foundry."""
+"""Ollama provider implementation."""
 
 import json
-from abc import ABC, abstractmethod
 from typing import AsyncIterator
 
 import aiohttp
 import requests
 from requests.exceptions import RequestException
-from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
-from semantic_kernel.connectors.ai.prompt_execution_settings import (
-    PromptExecutionSettings,
-)
 from semantic_kernel.contents import (
     AuthorRole,
     ChatHistory,
@@ -18,106 +13,14 @@ from semantic_kernel.contents import (
 )
 
 from agent_foundry.env import get_env_var
-from agent_foundry.providers import (
-    OllamaSettings,
-    OpenAISettings,
-    ProviderConfig,
-    ProviderSettings,
-)
-
-
-class Provider(ABC):
-    """Base class for providers."""
-
-    def __init__(self, config: ProviderConfig):
-        """Initialize the provider.
-
-        Args:
-            config: Provider configuration
-        """
-        self.config = config
-        self.settings: ProviderSettings = config.get_settings()
-        self.agent_id = getattr(config, "agent_id", None)
-
-    @abstractmethod
-    def chat(self, history: ChatHistory) -> AsyncIterator[StreamingChatMessageContent]:
-        """Process a chat message and return the response.
-
-        Args:
-            history: Chat history
-
-        Returns:
-            Async generator of response chunks
-        """
-        raise NotImplementedError  # pragma: no cover
-
-
-class OpenAIProvider(Provider):
-    """OpenAI provider implementation."""
-
-    def __init__(self, config: ProviderConfig):
-        """Initialize the OpenAI provider.
-
-        Args:
-            config: Provider configuration
-        """
-        super().__init__(config)
-        if not isinstance(self.settings, OpenAISettings):
-            raise ValueError("Invalid settings type for OpenAI provider")
-
-        # Get model from config, env, or default
-        env_model = get_env_var(
-            "OPENAI_MODEL",
-            "",
-            self.agent_id,
-        )
-        self.model = env_model or config.model or "gpt-3.5-turbo"
-
-        # Initialize OpenAI client
-        self.client = OpenAIChatCompletion(ai_model_id=self.model)
-
-    async def chat(
-        self, history: ChatHistory
-    ) -> AsyncIterator[StreamingChatMessageContent]:
-        """Process a chat message using OpenAI.
-
-        Args:
-            history: Chat history
-
-        Returns:
-            Async generator of response chunks
-        """
-        if not isinstance(self.settings, OpenAISettings):
-            raise ValueError("Invalid settings type for OpenAI provider")
-
-        settings = PromptExecutionSettings(
-            service_id=None,
-            extension_data={},
-            temperature=self.settings.temperature,
-            top_p=self.settings.top_p,
-            max_tokens=self.settings.max_tokens,
-        )
-
-        async for chunk in self.client.get_streaming_chat_message_content(
-            chat_history=history,
-            settings=settings,
-        ):
-            if chunk is not None:
-                yield chunk
+from agent_foundry.providers.base import OllamaSettings, Provider, ProviderConfig
 
 
 class OllamaProvider(Provider):
     """Ollama provider implementation."""
 
     def __init__(self, config: ProviderConfig) -> None:
-        """Initialize provider.
-
-        Args:
-            config: Provider configuration
-
-        Raises:
-            RuntimeError: If Ollama server is not running or not accessible
-        """
+        """Initialize provider."""
         # Get model and base URL from environment variables
         env_model = get_env_var(
             "OLLAMA_MODEL",
@@ -155,11 +58,7 @@ class OllamaProvider(Provider):
         self._check_server()
 
     def _check_server(self) -> None:
-        """Check if Ollama server is running.
-
-        Raises:
-            RuntimeError: If Ollama server is not running or not accessible
-        """
+        """Check if Ollama server is running."""
         if not isinstance(self.settings, OllamaSettings):
             raise ValueError("Invalid settings type for Ollama provider")
 
@@ -177,17 +76,7 @@ class OllamaProvider(Provider):
     async def chat(
         self, history: ChatHistory
     ) -> AsyncIterator[StreamingChatMessageContent]:
-        """Process a chat message using Ollama.
-
-        Args:
-            history: Chat history
-
-        Returns:
-            Async generator of response chunks
-
-        Raises:
-            RuntimeError: If Ollama returns an error
-        """
+        """Process a chat message using Ollama."""
         if not isinstance(self.settings, OllamaSettings):
             raise ValueError("Invalid settings type for Ollama provider")
 
@@ -229,23 +118,3 @@ class OllamaProvider(Provider):
                             )
                     except json.JSONDecodeError:
                         continue
-
-
-def get_provider(config: ProviderConfig) -> Provider:
-    """Get the appropriate provider instance.
-
-    Args:
-        config: Provider configuration
-
-    Returns:
-        Provider instance
-
-    Raises:
-        ValueError: If provider type is unknown
-    """
-    if config.name == "openai":
-        return OpenAIProvider(config)
-    elif config.name == "ollama":
-        return OllamaProvider(config)
-    else:
-        raise ValueError(f"Unknown provider type: {config.name}")
