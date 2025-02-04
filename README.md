@@ -9,6 +9,7 @@ A tool for creating and managing AI agents. Agent Foundry provides a simple CLI 
 - 🛠️ Multiple LLM provider support (OpenAI, Ollama)
 - 📝 Customizable system prompts
 - 🔌 Per-agent environment configuration
+- 🌐 Flexible environment variable handling
 
 ## Installation
 
@@ -38,15 +39,18 @@ Example `.env` files:
 # Project-wide .env
 OPENAI_API_KEY=your_api_key_here
 OPENAI_MODEL=gpt-4  # Optional, defaults to gpt-3.5-turbo
+AGENT_FOUNDRY_OPENAI_MODEL=gpt-4-turbo  # Optional, agent-specific model
 
 # Ollama Settings
-OLLAMA_HOST=http://localhost:11434  # Optional
+OLLAMA_BASE_URL=http://localhost:11434  # Optional
 OLLAMA_MODEL=llama2  # Optional
+AGENT_FOUNDRY_OLLAMA_MODEL=codellama  # Optional, agent-specific model
+AGENT_FOUNDRY_OLLAMA_BASE_URL=http://custom:11434  # Optional, agent-specific URL
 ```
 
 ```bash
 # Per-agent .env (.agents/my-agent/.env)
-OPENAI_MODEL=gpt-4  # Override model just for this agent
+AGENT_FOUNDRY_OPENAI_MODEL=gpt-4  # Override model just for this agent
 ```
 
 ## Usage
@@ -57,16 +61,16 @@ Create a new agent with an optional name, provider, and system prompt:
 
 ```bash
 # Create with OpenAI (default)
-foundry create my-agent --provider openai --model gpt-4
+python -m agent_foundry create my-agent --provider openai --model gpt-4
 
 # Create with Ollama
-foundry create llama-agent --provider ollama --model llama2
+python -m agent_foundry create llama-agent --provider ollama --model llama2
 
 # Create with custom system prompt
-foundry create my-agent --system-prompt "You are a helpful coding assistant."
+python -m agent_foundry create my-agent --system-prompt "You are a helpful coding assistant."
 
 # Create with debug mode
-foundry create my-agent --debug
+python -m agent_foundry create my-agent --debug
 ```
 
 ### Running an Agent
@@ -75,10 +79,10 @@ Start an interactive chat session with an agent:
 
 ```bash
 # Basic run
-foundry run my-agent
+python -m agent_foundry run my-agent
 
 # Run with debug mode
-foundry run my-agent --debug
+python -m agent_foundry run my-agent --debug
 ```
 
 The agent will respond in real-time with streaming output.
@@ -89,10 +93,10 @@ List all available agents:
 
 ```bash
 # Basic list
-foundry list
+python -m agent_foundry list
 
 # Detailed list with configurations
-foundry list --verbose
+python -m agent_foundry list --verbose
 ```
 
 ### Deleting an Agent
@@ -101,10 +105,10 @@ Delete an agent:
 
 ```bash
 # With confirmation prompt
-foundry delete my-agent
+python -m agent_foundry delete my-agent
 
 # Force delete without confirmation
-foundry delete my-agent --force
+python -m agent_foundry delete my-agent --force
 ```
 
 ## Project Structure
@@ -113,6 +117,7 @@ foundry delete my-agent --force
 agent-foundry/
 ├── agent_foundry/          # Main package
 │   ├── __init__.py
+│   ├── __main__.py        # Package entry point
 │   ├── agent.py           # Agent implementation
 │   ├── provider_impl.py   # Provider implementations
 │   ├── providers.py       # Provider definitions
@@ -121,7 +126,7 @@ agent-foundry/
 │   │   ├── __init__.py
 │   │   └── commands.py
 │   └── constants.py       # Shared constants
-├── tests/                 # Test suite (83% coverage)
+├── tests/                 # Test suite (95% coverage)
 ├── .env                   # Global environment variables
 └── .agents/              # Agent storage directory
     └── my-agent/         # Individual agent directory
@@ -156,10 +161,10 @@ Each agent is defined by a `config.json` file with the following structure:
 {
   "provider": {
     "name": "openai",
-    "model": "gpt-4",  // Optional, falls back to OPENAI_MODEL or gpt-3.5-turbo
+    "model": "gpt-4",  // Optional, falls back to AGENT_FOUNDRY_OPENAI_MODEL, OPENAI_MODEL, or gpt-3.5-turbo
     "settings": {
       "temperature": 0.7,    // Optional, default: 0.7
-      "top_p": 0.95,        // Optional, default: 0.95
+      "top_p": 1.0,         // Optional, default: 1.0
       "max_tokens": 1000    // Optional, default: 1000
     }
   }
@@ -171,11 +176,10 @@ Each agent is defined by a `config.json` file with the following structure:
 {
   "provider": {
     "name": "ollama",
-    "model": "llama2",  // Optional, falls back to OLLAMA_MODEL or llama2
+    "model": "llama2",  // Optional, falls back to AGENT_FOUNDRY_OLLAMA_MODEL, OLLAMA_MODEL, or llama2
     "settings": {
       "temperature": 0.7,      // Optional, default: 0.7
-      "base_url": "http://localhost:11434",  // Optional
-      "context_window": 4096   // Optional, default: 4096
+      "base_url": "http://localhost:11434"  // Optional, falls back to AGENT_FOUNDRY_OLLAMA_BASE_URL, OLLAMA_BASE_URL, or default
     }
   }
 }
@@ -184,9 +188,9 @@ Each agent is defined by a `config.json` file with the following structure:
 ### Environment Variables
 
 Settings precedence order (highest to lowest):
-1. System environment variables
-2. Agent-specific `.env` file (if exists)
-3. Project-wide `.env` file
+1. Agent-specific environment variables (AGENT_FOUNDRY_*)
+2. Global environment variables
+3. Configuration file values
 4. Default values
 
 ## Development
@@ -221,7 +225,8 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ✅ Real-time streaming responses
 ✅ Command-line interface
 ✅ Per-agent environment variables
-✅ Test suite (83% coverage)
+✅ Test suite (95% coverage)
+✅ Robust environment variable handling
 ⏳ Documentation site
 ⏳ CI/CD pipeline
 
@@ -230,5 +235,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - [ ] Add more provider implementations (Anthropic, etc.)
 - [ ] Add conversation history persistence
 - [ ] Add plugin system for custom capabilities
-- [ ] Improve test coverage to 90%+
 - [ ] Add comprehensive documentation site
+- [ ] Add support for function calling
+- [ ] Add support for tool usage

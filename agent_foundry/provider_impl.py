@@ -5,6 +5,8 @@ from abc import ABC, abstractmethod
 from typing import AsyncIterator
 
 import aiohttp
+import requests
+from requests.exceptions import RequestException
 from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
 from semantic_kernel.connectors.ai.prompt_execution_settings import (
     PromptExecutionSettings,
@@ -122,6 +124,9 @@ class OllamaProvider(Provider):
 
         Args:
             config: Provider configuration
+
+        Raises:
+            RuntimeError: If Ollama server is not running or not accessible
         """
         # Get model and base URL from environment variables first
         if config.agent_id:
@@ -169,6 +174,29 @@ class OllamaProvider(Provider):
         super().__init__(updated_config)
         if not isinstance(self.settings, OllamaSettings):
             raise ValueError("Invalid settings type for Ollama provider")
+
+        # Check if Ollama server is running
+        self._check_server()
+
+    def _check_server(self) -> None:
+        """Check if Ollama server is running.
+
+        Raises:
+            RuntimeError: If Ollama server is not running or not accessible
+        """
+        if not isinstance(self.settings, OllamaSettings):
+            raise ValueError("Invalid settings type for Ollama provider")
+
+        try:
+            response = requests.get(f"{self.settings.base_url}/api/version")
+            response.raise_for_status()
+            version = response.json().get("version")
+            if not version:
+                raise RuntimeError("Ollama server returned invalid version response")
+        except RequestException as e:
+            raise RuntimeError(
+                f"Ollama server not running at {self.settings.base_url}: {str(e)}"
+            ) from e
 
     async def chat(
         self, history: ChatHistory

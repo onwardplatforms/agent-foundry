@@ -5,6 +5,7 @@ from typing import Any, AsyncIterator
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 from aiohttp import ClientResponse, StreamReader
 from semantic_kernel.contents import AuthorRole, ChatHistory
 
@@ -127,11 +128,29 @@ class TestOllamaProvider:
             "AGENT_FOUNDRY_OLLAMA_BASE_URL": "",
         }
         with patch.dict("os.environ", env, clear=True):
-            provider = OllamaProvider(ollama_config)
-            assert provider.model == "llama2"
-            assert isinstance(provider.settings, OllamaSettings)
-            assert provider.settings.temperature == 0.5
-            assert provider.settings.base_url == "http://localhost:11434"
+            # Mock the server check
+            mock_response = MagicMock()
+            mock_response.json.return_value = {"version": "0.5.0"}
+            with patch("requests.get", return_value=mock_response):
+                provider = OllamaProvider(ollama_config)
+                assert provider.model == "llama2"
+                assert isinstance(provider.settings, OllamaSettings)
+                assert provider.settings.temperature == 0.5
+                assert provider.settings.base_url == "http://localhost:11434"
+
+    def test_init_server_not_running(self, ollama_config: ProviderConfig) -> None:
+        """Test provider initialization when server is not running."""
+        with patch("requests.get", side_effect=requests.exceptions.ConnectionError()):
+            with pytest.raises(RuntimeError, match="Ollama server not running"):
+                OllamaProvider(ollama_config)
+
+    def test_init_invalid_response(self, ollama_config: ProviderConfig) -> None:
+        """Test provider initialization with invalid server response."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {}
+        with patch("requests.get", return_value=mock_response):
+            with pytest.raises(RuntimeError, match="invalid version response"):
+                OllamaProvider(ollama_config)
 
     def test_init_with_env(self, ollama_config: ProviderConfig) -> None:
         """Test provider initialization with environment variables."""
@@ -142,23 +161,27 @@ class TestOllamaProvider:
             "AGENT_FOUNDRY_OLLAMA_BASE_URL": "http://agent:11434",
         }
         with patch.dict("os.environ", env):
-            # No agent ID - use OLLAMA_MODEL and OLLAMA_BASE_URL
-            provider = OllamaProvider(ollama_config)
-            assert provider.model == "mistral"
-            assert isinstance(provider.settings, OllamaSettings)
-            assert provider.settings.base_url == "http://test:11434"
+            # Mock the server check
+            mock_response = MagicMock()
+            mock_response.json.return_value = {"version": "0.5.0"}
+            with patch("requests.get", return_value=mock_response):
+                # No agent ID - use OLLAMA_MODEL and OLLAMA_BASE_URL
+                provider = OllamaProvider(ollama_config)
+                assert provider.model == "mistral"
+                assert isinstance(provider.settings, OllamaSettings)
+                assert provider.settings.base_url == "http://test:11434"
 
-            # With agent ID - use AGENT_FOUNDRY_OLLAMA_MODEL
-            config = ProviderConfig(
-                name=ProviderType.OLLAMA,
-                model=None,
-                settings={"temperature": 0.5},
-                agent_id="test",
-            )
-            provider = OllamaProvider(config)
-            assert provider.model == "codellama"
-            assert isinstance(provider.settings, OllamaSettings)
-            assert provider.settings.base_url == "http://agent:11434"
+                # With agent ID - use AGENT_FOUNDRY_OLLAMA_MODEL
+                config = ProviderConfig(
+                    name=ProviderType.OLLAMA,
+                    model=None,
+                    settings={"temperature": 0.5},
+                    agent_id="test",
+                )
+                provider = OllamaProvider(config)
+                assert provider.model == "codellama"
+                assert isinstance(provider.settings, OllamaSettings)
+                assert provider.settings.base_url == "http://agent:11434"
 
     @pytest.mark.asyncio
     async def test_chat(
@@ -166,6 +189,72 @@ class TestOllamaProvider:
     ) -> None:
         """Test chat functionality."""
         with patch.dict("os.environ", {"OLLAMA_BASE_URL": "http://test:11434"}):
+            # Mock the server check
+            mock_response = MagicMock()
+            mock_response.json.return_value = {"version": "0.5.0"}
+            with patch("requests.get", return_value=mock_response):
+                provider = OllamaProvider(ollama_config)
+
+                # Mock aiohttp response
+                mock_response = MagicMock(spec=ClientResponse)
+                mock_response.raise_for_status = MagicMock()
+
+                # Create mock stream reader
+                stream = MagicMock(spec=StreamReader)
+
+                async def mock_iter(*args: Any, **kwargs: Any) -> AsyncIterator[bytes]:
+                    yield json.dumps(
+                        {"message": {"content": "Hello! I'm Llama."}}
+                    ).encode() + b"\n"
+                    yield b""  # EOF
+
+                stream.__aiter__ = mock_iter
+                mock_response.content = stream
+
+                # Mock aiohttp session
+                mock_session = MagicMock()
+                mock_session.__aenter__.return_value = mock_session
+                mock_session.post.return_value.__aenter__.return_value = mock_response
+
+                with patch("aiohttp.ClientSession") as mock_client:
+                    mock_client.return_value = mock_session
+
+                    # Test the chat method
+                    chunks = []
+                    async for chunk in provider.chat(chat_history):
+                        chunks.append(chunk)
+
+                    assert len(chunks) == 1
+                    assert chunks[0].content == "Hello! I'm Llama."
+                    assert chunks[0].role == AuthorRole.ASSISTANT
+
+                    # Verify API call
+                    mock_session.post.assert_called_once_with(
+                        "http://test:11434/api/chat",
+                        json={
+                            "model": "llama2",
+                            "messages": [
+                                {
+                                    "role": "system",
+                                    "content": "You are a test assistant.",
+                                },
+                                {"role": "user", "content": "Hello!"},
+                            ],
+                            "stream": True,
+                            "options": {"temperature": 0.5},
+                        },
+                        headers={"Content-Type": "application/json"},
+                    )
+
+    @pytest.mark.asyncio
+    async def test_chat_error_handling(
+        self, ollama_config: ProviderConfig, chat_history: ChatHistory
+    ) -> None:
+        """Test chat error handling."""
+        # Mock the server check
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"version": "0.5.0"}
+        with patch("requests.get", return_value=mock_response):
             provider = OllamaProvider(ollama_config)
 
             # Mock aiohttp response
@@ -176,9 +265,7 @@ class TestOllamaProvider:
             stream = MagicMock(spec=StreamReader)
 
             async def mock_iter(*args: Any, **kwargs: Any) -> AsyncIterator[bytes]:
-                yield json.dumps(
-                    {"message": {"content": "Hello! I'm Llama."}}
-                ).encode() + b"\n"
+                yield json.dumps({"error": "Something went wrong"}).encode() + b"\n"
                 yield b""  # EOF
 
             stream.__aiter__ = mock_iter
@@ -192,65 +279,9 @@ class TestOllamaProvider:
             with patch("aiohttp.ClientSession") as mock_client:
                 mock_client.return_value = mock_session
 
-                # Test the chat method
-                chunks = []
-                async for chunk in provider.chat(chat_history):
-                    chunks.append(chunk)
-
-                assert len(chunks) == 1
-                assert chunks[0].content == "Hello! I'm Llama."
-                assert chunks[0].role == AuthorRole.ASSISTANT
-
-                # Verify API call
-                mock_session.post.assert_called_once_with(
-                    "http://test:11434/api/chat",
-                    json={
-                        "model": "llama2",
-                        "messages": [
-                            {
-                                "role": "system",
-                                "content": "You are a test assistant.",
-                            },
-                            {"role": "user", "content": "Hello!"},
-                        ],
-                        "stream": True,
-                        "options": {"temperature": 0.5},
-                    },
-                    headers={"Content-Type": "application/json"},
-                )
-
-    @pytest.mark.asyncio
-    async def test_chat_error_handling(
-        self, ollama_config: ProviderConfig, chat_history: ChatHistory
-    ) -> None:
-        """Test chat error handling."""
-        provider = OllamaProvider(ollama_config)
-
-        # Mock aiohttp response
-        mock_response = MagicMock(spec=ClientResponse)
-        mock_response.raise_for_status = MagicMock()
-
-        # Create mock stream reader
-        stream = MagicMock(spec=StreamReader)
-
-        async def mock_iter(*args: Any, **kwargs: Any) -> AsyncIterator[bytes]:
-            yield json.dumps({"error": "Something went wrong"}).encode() + b"\n"
-            yield b""  # EOF
-
-        stream.__aiter__ = mock_iter
-        mock_response.content = stream
-
-        # Mock aiohttp session
-        mock_session = MagicMock()
-        mock_session.__aenter__.return_value = mock_session
-        mock_session.post.return_value.__aenter__.return_value = mock_response
-
-        with patch("aiohttp.ClientSession") as mock_client:
-            mock_client.return_value = mock_session
-
-            # Test error handling
-            with pytest.raises(
-                RuntimeError, match="Ollama error: Something went wrong"
-            ):
-                async for _ in provider.chat(chat_history):
-                    pass
+                # Test error handling
+                with pytest.raises(
+                    RuntimeError, match="Ollama error: Something went wrong"
+                ):
+                    async for _ in provider.chat(chat_history):
+                        pass
