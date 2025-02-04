@@ -1,0 +1,9 @@
+pytest
+pytest-cov
+pytest-mock
+click
+black
+flake8
+isort
+mypy
+pre-commit

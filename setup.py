@@ -1,18 +1,20 @@
-from setuptools import setup
+"""Setup configuration for Agent Foundry."""
+
+from setuptools import find_packages, setup
 
 setup(
-    name="agent-foundry",
+    name="agent_foundry",
     version="0.1.0",
-    py_modules=['cli'],
+    packages=find_packages(),
     install_requires=[
         "click",
-        "openai",
+        "semantic-kernel",
         "python-dotenv",
         "uuid",
     ],
     entry_points={
         "console_scripts": [
-            "foundry=cli:cli",
+            "foundry=agent_foundry.cli.commands:cli",
         ],
     },
-) 
+)
