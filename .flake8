@@ -1,6 +1,10 @@
 [flake8]
 max-line-length = 88
 extend-ignore = E203
+docstring-convention = google
+select = C,E,F,W,B,B950,D
+ignore = D104,D107,D203,D213,D406,D407,D413
 exclude = .git,__pycache__,build,dist,*.egg-info,venv
 per-file-ignores =
     __init__.py: F401
+    tests/*:D100,D101,D102,D103

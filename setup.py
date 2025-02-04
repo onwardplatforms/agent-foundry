@@ -1,20 +1,15 @@
-"""Setup configuration for Agent Foundry."""
+"""Setup script for the agent-foundry package."""
 
-from setuptools import find_packages, setup
+from setuptools import setup  # type: ignore
 
 setup(
-    name="agent_foundry",
-    version="0.1.0",
-    packages=find_packages(),
-    install_requires=[
-        "click",
-        "semantic-kernel",
-        "python-dotenv",
-        "uuid",
-    ],
+    name="agent-foundry",
+    packages=["agent_foundry"],
+    package_dir={"": "."},
+    include_package_data=True,
     entry_points={
         "console_scripts": [
-            "foundry=agent_foundry.cli.commands:cli",
+            "foundry=agent_foundry.__main__:main",
         ],
     },
 )

@@ -2,5 +2,11 @@
 
 from agent_foundry.cli.commands import cli
 
-if __name__ == "__main__":
+
+def main() -> None:
+    """Entry point for the foundry CLI."""
     cli()
+
+
+if __name__ == "__main__":
+    main()

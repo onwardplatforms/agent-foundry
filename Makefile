@@ -1,7 +1,7 @@
 .PHONY: help venv install install-dev clean test lint format check all
 
 # Variables
-PYTHON = python3
+PYTHON = python3.11
 VENV = venv
 VENV_BIN = $(VENV)/bin
 PYTEST = $(VENV_BIN)/pytest
