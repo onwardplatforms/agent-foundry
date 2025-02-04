@@ -11,19 +11,58 @@ A tool for creating and managing AI agents. Agent Foundry provides a simple CLI 
 - 🔌 Per-agent environment configuration
 - 🌐 Flexible environment variable handling
 
+## Quickstart
+
+```bash
+# Clone the repository
+git clone https://github.com/onwardplatforms/agent-foundry.git
+cd agent-foundry
+
+# Install dependencies and set up development environment
+make install-dev
+
+# Create and run your first agent
+foundry create my-agent
+foundry run my-agent
+```
+
 ## Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/agent-foundry.git
+git clone https://github.com/onwardplatforms/agent-foundry.git
 cd agent-foundry
 
-# Create and activate a virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# Install in development mode with all dependencies
+make install-dev
 
-# Install in editable mode
-pip install -e .
+# Or install in production mode
+make install
+```
+
+## Development
+
+```bash
+# Install development dependencies
+make install-dev
+
+# Format code
+make format
+
+# Run linters
+make lint
+
+# Run type checking
+make check
+
+# Run tests
+make test
+
+# Run all checks
+make all
+
+# Clean up
+make clean
 ```
 
 ## Configuration
@@ -57,11 +96,6 @@ OPENAI_MODEL=gpt-4  # Override model just for this agent
 OPENAI_API_KEY=agent-specific-key  # Use different API key for this agent
 ```
 
-This approach allows you to:
-- Set default values in your project's root `.env`
-- Override settings for specific agents in their `.env` files
-- Keep sensitive information (like API keys) separate for different agents
-
 ## Usage
 
 ### Creating an Agent
@@ -70,16 +104,16 @@ Create a new agent with an optional name, provider, and system prompt:
 
 ```bash
 # Create with OpenAI (default)
-python -m agent_foundry create my-agent --provider openai --model gpt-4
+foundry create my-agent --provider openai --model gpt-4
 
 # Create with Ollama
-python -m agent_foundry create llama-agent --provider ollama --model llama2
+foundry create llama-agent --provider ollama --model llama2
 
 # Create with custom system prompt
-python -m agent_foundry create my-agent --system-prompt "You are a helpful coding assistant."
+foundry create my-agent --system-prompt "You are a helpful coding assistant."
 
 # Create with debug mode
-python -m agent_foundry create my-agent --debug
+foundry create my-agent --debug
 ```
 
 ### Running an Agent
@@ -88,10 +122,10 @@ Start an interactive chat session with an agent:
 
 ```bash
 # Basic run
-python -m agent_foundry run my-agent
+foundry run my-agent
 
 # Run with debug mode
-python -m agent_foundry run my-agent --debug
+foundry run my-agent --debug
 ```
 
 The agent will respond in real-time with streaming output.
@@ -102,10 +136,10 @@ List all available agents:
 
 ```bash
 # Basic list
-python -m agent_foundry list
+foundry list
 
 # Detailed list with configurations
-python -m agent_foundry list --verbose
+foundry list --verbose
 ```
 
 ### Deleting an Agent
@@ -114,10 +148,10 @@ Delete an agent:
 
 ```bash
 # With confirmation prompt
-python -m agent_foundry delete my-agent
+foundry delete my-agent
 
 # Force delete without confirmation
-python -m agent_foundry delete my-agent --force
+foundry delete my-agent --force
 ```
 
 ## Project Structure
@@ -133,9 +167,9 @@ agent-foundry/
 │   ├── env.py            # Environment handling
 │   ├── cli/              # CLI implementation
 │   │   ├── __init__.py
-│   │   └── commands.py
+│   │   └── cli.py
 │   └── constants.py       # Shared constants
-├── tests/                 # Test suite (95% coverage)
+├── tests/                 # Test suite (90% coverage)
 ├── .env                   # Global environment variables
 └── .agents/              # Agent storage directory
     └── my-agent/         # Individual agent directory
@@ -202,22 +236,6 @@ Settings precedence order (highest to lowest):
 3. Configuration file values
 4. Default values
 
-## Development
-
-```bash
-# Install development dependencies
-pip install -e ".[dev]"
-
-# Run tests
-make test
-
-# Run linting and type checking
-make lint
-
-# Run all checks
-make all
-```
-
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
@@ -234,7 +252,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ✅ Real-time streaming responses
 ✅ Command-line interface
 ✅ Per-agent environment variables
-✅ Test suite (95% coverage)
+✅ Test suite (90% coverage)
 ✅ Robust environment variable handling
 ⏳ Documentation site
 ⏳ CI/CD pipeline

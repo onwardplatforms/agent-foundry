@@ -1,4 +1,4 @@
-"""Tests for the Agent Foundry CLI."""
+"""Tests for the CLI module."""
 
 import json
 import os
@@ -9,7 +9,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from agent_foundry.cli.commands import cli
+from agent_foundry import __version__
+from agent_foundry.cli.cli import cli
 from agent_foundry.constants import AGENTS_DIR, DEFAULT_SYSTEM_PROMPT
 
 
@@ -27,6 +28,13 @@ def mock_openai() -> Generator[MagicMock, None, None]:
         patch("semantic_kernel.connectors.ai.open_ai.OpenAIChatCompletion") as mock,
     ):
         yield mock
+
+
+def test_version(runner):
+    """Test the version command."""
+    result = runner.invoke(cli, ["--version"])
+    assert result.exit_code == 0
+    assert __version__ in result.output
 
 
 def test_create_with_random_id(runner: CliRunner, tmp_path: Path) -> None:

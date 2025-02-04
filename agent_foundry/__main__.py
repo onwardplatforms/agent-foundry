@@ -1,6 +1,6 @@
-"""Main entry point for Agent Foundry."""
+"""Main entry point for the agent_foundry package."""
 
-from agent_foundry.cli.commands import cli
+from agent_foundry.cli.cli import cli
 
 
 def main() -> None:

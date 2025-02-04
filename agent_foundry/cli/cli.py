@@ -40,6 +40,7 @@ def load_agent(agent_id: str) -> Optional[Agent]:
 
 
 @click.group()
+@click.version_option()
 def cli() -> None:
     """Create and manage AI agents."""
     pass

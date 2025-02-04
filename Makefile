@@ -10,6 +10,7 @@ BLACK = $(VENV_BIN)/black
 FLAKE8 = $(VENV_BIN)/flake8
 ISORT = $(VENV_BIN)/isort
 MYPY = $(VENV_BIN)/mypy
+SHELL := /bin/bash
 
 help:
 	@echo "Available commands:"
@@ -25,15 +26,15 @@ help:
 
 venv:
 	$(PYTHON) -m venv $(VENV)
-	$(PIP) install --upgrade pip
+	source $(VENV)/bin/activate && $(PIP) install --upgrade pip
 
 install: venv
-	$(PIP) install -r requirements.txt
-	$(PIP) install -e .
+	source $(VENV)/bin/activate && $(PIP) install -r requirements.txt
+	source $(VENV)/bin/activate && $(PIP) install -e .
 
 install-dev: install
-	$(PIP) install -r requirements-dev.txt
-	$(VENV_BIN)/pre-commit install
+	source $(VENV)/bin/activate && $(PIP) install -r requirements-dev.txt
+	source $(VENV)/bin/activate && $(VENV_BIN)/pre-commit install
 
 clean:
 	rm -rf $(VENV)
@@ -46,16 +47,16 @@ clean:
 	find . -type d -name "*.egg-info" -exec rm -rf {} +
 
 test:
-	$(PYTEST) tests/ -v --cov=. --cov-report=term-missing
+	source $(VENV)/bin/activate && $(PYTEST) tests/ -v --cov=. --cov-report=term-missing
 
 lint:
-	$(FLAKE8) .
+	source $(VENV)/bin/activate && $(FLAKE8) .
 
 format:
-	$(BLACK) .
-	$(ISORT) .
+	source $(VENV)/bin/activate && $(BLACK) .
+	source $(VENV)/bin/activate && $(ISORT) .
 
 check:
-	$(MYPY) .
+	source $(VENV)/bin/activate && $(MYPY) --package agent_foundry
 
 all: format lint check test

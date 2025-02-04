@@ -1,5 +1,5 @@
-"""CLI package for Agent Foundry."""
+"""Command-line interface for Agent Foundry."""
 
-from .commands import cli
+from .cli import cli
 
 __all__ = ["cli"]

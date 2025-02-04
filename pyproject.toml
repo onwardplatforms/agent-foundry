@@ -1,29 +1,29 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
-name = "agent-foundry"
+name = "agent_foundry"
 version = "0.1.0"
-authors = [
-  { name="Justin O'Connor", email="justin@jcoconnor.com" },
-]
 description = "A tool for creating and managing AI agents"
-readme = "README.md"
-requires-python = ">=3.11"
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+authors = [
+    { name = "Justin O'Connor", email = "justin@onwardplatforms.com" },
 ]
 dependencies = [
     "click",
     "semantic-kernel",
     "python-dotenv",
 ]
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+
+[project.urls]
+Homepage = "https://github.com/justinoconnor/agent-foundry"
+Repository = "https://github.com/justinoconnor/agent-foundry"
 
 [project.scripts]
-foundry = "agent_foundry.cli.commands:cli"
+foundry = "agent_foundry.cli.cli:cli"
 
 [tool.black]
 line-length = 88
@@ -47,7 +47,29 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 warn_no_return = true
 warn_unreachable = true
+packages = ["agent_foundry"]
 
 [[tool.mypy.overrides]]
 module = "semantic_kernel.*"
 ignore_missing_imports = true
+
+[tool.rye]
+managed = true
+dev-dependencies = [
+    "pytest",
+    "pytest-cov",
+    "pytest-mock",
+    "pytest-asyncio",
+    "click",
+    "black",
+    "flake8",
+    "flake8-docstrings",
+    "isort",
+    "mypy",
+    "pre-commit",
+    "pydantic",
+    "types-requests",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
