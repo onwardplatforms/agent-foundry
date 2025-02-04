@@ -16,7 +16,12 @@ from semantic_kernel.contents import (
 )
 
 from agent_foundry.env import get_env_var
-from agent_foundry.providers import OllamaSettings, OpenAISettings, ProviderConfig
+from agent_foundry.providers import (
+    OllamaSettings,
+    OpenAISettings,
+    ProviderConfig,
+    ProviderSettings,
+)
 
 
 class Provider(ABC):
@@ -29,7 +34,7 @@ class Provider(ABC):
             config: Provider configuration
         """
         self.config = config
-        self.settings = config.get_settings()
+        self.settings: ProviderSettings = config.get_settings()
         self.agent_id = getattr(config, "agent_id", None)
 
     @abstractmethod
@@ -55,12 +60,26 @@ class OpenAIProvider(Provider):
             config: Provider configuration
         """
         super().__init__(config)
-        self.settings: OpenAISettings
+        if not isinstance(self.settings, OpenAISettings):
+            raise ValueError("Invalid settings type for OpenAI provider")
 
         # Get model from config, env, or default
-        self.model = config.model or get_env_var(
-            "OPENAI_MODEL", "gpt-3.5-turbo", self.agent_id
-        )
+        if self.agent_id:
+            # Use agent-specific environment variable if agent_id is set
+            env_model = get_env_var(
+                "AGENT_FOUNDRY_OPENAI_MODEL",
+                "",
+                self.agent_id,
+            )
+            self.model = env_model or config.model or "gpt-3.5-turbo"
+        else:
+            # Use global environment variable if no agent_id
+            env_model = get_env_var(
+                "OPENAI_MODEL",
+                "",
+                None,
+            )
+            self.model = env_model or config.model or "gpt-3.5-turbo"
 
         # Initialize OpenAI client
         self.client = OpenAIChatCompletion(ai_model_id=self.model)
@@ -76,6 +95,9 @@ class OpenAIProvider(Provider):
         Returns:
             Async generator of response chunks
         """
+        if not isinstance(self.settings, OpenAISettings):
+            raise ValueError("Invalid settings type for OpenAI provider")
+
         settings = PromptExecutionSettings(
             service_id=None,
             extension_data={},
@@ -95,22 +117,58 @@ class OpenAIProvider(Provider):
 class OllamaProvider(Provider):
     """Ollama provider implementation."""
 
-    def __init__(self, config: ProviderConfig):
-        """Initialize the Ollama provider.
+    def __init__(self, config: ProviderConfig) -> None:
+        """Initialize provider.
 
         Args:
             config: Provider configuration
         """
-        super().__init__(config)
-        self.settings: OllamaSettings
+        # Get model and base URL from environment variables first
+        if config.agent_id:
+            # Use agent-specific environment variables if agent_id is set
+            env_model = get_env_var(
+                "AGENT_FOUNDRY_OLLAMA_MODEL",
+                "",
+                config.agent_id,
+            )
+            env_base_url = get_env_var(
+                "AGENT_FOUNDRY_OLLAMA_BASE_URL",
+                "",
+                config.agent_id,
+            )
+        else:
+            # Use global environment variables if no agent_id
+            env_model = get_env_var(
+                "OLLAMA_MODEL",
+                "",
+                None,
+            )
+            env_base_url = get_env_var(
+                "OLLAMA_BASE_URL",
+                "",
+                None,
+            )
 
-        # Get model and host from config, env, or default
-        self.model = config.model or get_env_var(
-            "OLLAMA_MODEL", "llama2", self.agent_id
+        # Set model from environment or config or default
+        self.model = env_model or config.model or "llama2"
+
+        # Update settings with environment values
+        settings = config.settings or {}
+        settings["base_url"] = (
+            env_base_url or settings.get("base_url") or "http://localhost:11434"
         )
-        self.base_url = self.settings.base_url or get_env_var(
-            "OLLAMA_HOST", "http://localhost:11434", self.agent_id
+
+        # Create a new config with updated settings
+        updated_config = ProviderConfig(
+            name=config.name,
+            model=config.model,
+            settings=settings,
+            agent_id=config.agent_id,
         )
+
+        super().__init__(updated_config)
+        if not isinstance(self.settings, OllamaSettings):
+            raise ValueError("Invalid settings type for Ollama provider")
 
     async def chat(
         self, history: ChatHistory
@@ -122,56 +180,51 @@ class OllamaProvider(Provider):
 
         Returns:
             Async generator of response chunks
-        """
-        # Convert chat history to Ollama format
-        messages = []
-        for message in history.messages:
-            messages.append(
-                {
-                    "role": message.role.lower(),
-                    "content": message.content,
-                }
-            )
 
-        # Prepare request payload
+        Raises:
+            RuntimeError: If Ollama returns an error
+        """
+        if not isinstance(self.settings, OllamaSettings):
+            raise ValueError("Invalid settings type for Ollama provider")
+
+        messages = []
+        for msg in history.messages:
+            if msg.role == AuthorRole.SYSTEM:
+                messages.append({"role": "system", "content": msg.content})
+            elif msg.role == AuthorRole.USER:
+                messages.append({"role": "user", "content": msg.content})
+            elif msg.role == AuthorRole.ASSISTANT:
+                messages.append({"role": "assistant", "content": msg.content})
+
         payload = {
             "model": self.model,
             "messages": messages,
             "stream": True,
-            "options": {
-                "temperature": self.settings.temperature,
-            },
+            "options": {"temperature": self.settings.temperature},
         }
 
-        # Make streaming request to Ollama API
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                f"{self.base_url}/api/chat",
+                f"{self.settings.base_url}/api/chat",
                 json=payload,
                 headers={"Content-Type": "application/json"},
             ) as response:
                 response.raise_for_status()
-
-                # Process streaming response
                 async for line in response.content:
                     if not line:
                         continue
-
                     try:
-                        chunk_data = json.loads(line)
-                        if "error" in chunk_data:
-                            raise RuntimeError(f"Ollama error: {chunk_data['error']}")
-
-                        if "message" in chunk_data:
-                            content = chunk_data["message"].get("content", "")
-                            if content:
-                                yield StreamingChatMessageContent(
-                                    role=AuthorRole.ASSISTANT,
-                                    content=content,
-                                    choice_index=0,  # Ollama only returns one choice
-                                )
+                        data = json.loads(line)
+                        if "error" in data:
+                            raise RuntimeError(f"Ollama error: {data['error']}")
+                        if "message" in data:
+                            yield StreamingChatMessageContent(
+                                role=AuthorRole.ASSISTANT,
+                                content=data["message"]["content"],
+                                choice_index=0,
+                            )
                     except json.JSONDecodeError:
-                        continue  # Skip invalid JSON lines
+                        continue
 
 
 def get_provider(config: ProviderConfig) -> Provider:

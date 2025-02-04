@@ -1,12 +1,12 @@
-"""Provider definitions for Agent Foundry."""
+"""Provider configuration for Agent Foundry."""
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Union
 
 
 class ProviderType(str, Enum):
-    """Supported provider types."""
+    """Provider types."""
 
     OPENAI = "openai"
     OLLAMA = "ollama"
@@ -14,25 +14,27 @@ class ProviderType(str, Enum):
 
 @dataclass
 class BaseProviderSettings:
-    """Base class for provider settings."""
+    """Base provider settings."""
 
     temperature: float = 0.7
 
 
 @dataclass
 class OpenAISettings(BaseProviderSettings):
-    """Settings for OpenAI provider."""
+    """OpenAI provider settings."""
 
-    top_p: float = 0.95
+    top_p: float = 1.0
     max_tokens: int = 1000
 
 
 @dataclass
 class OllamaSettings(BaseProviderSettings):
-    """Settings for Ollama provider."""
+    """Ollama provider settings."""
 
     base_url: str = "http://localhost:11434"
-    context_window: int = 4096
+
+
+ProviderSettings = Union[BaseProviderSettings, OpenAISettings, OllamaSettings]
 
 
 @dataclass
@@ -76,20 +78,30 @@ class ProviderConfig:
             "settings": self.settings or {},
         }
 
-    def get_settings(self) -> BaseProviderSettings:
-        """Get the appropriate settings class for this provider.
+    def get_settings(self) -> ProviderSettings:
+        """Get provider settings.
 
         Returns:
-            Provider-specific settings instance
+            Provider settings
         """
-        settings_dict = self.settings or {}
+        settings = self.settings or {}
+        temperature = settings.get("temperature", 0.7)
 
-        if self.name == ProviderType.OPENAI:
-            return OpenAISettings(**settings_dict)
-        elif self.name == ProviderType.OLLAMA:
-            return OllamaSettings(**settings_dict)
-        else:
-            raise ValueError(f"Unknown provider type: {self.name}")
+        provider_settings: Dict[ProviderType, Callable[[], ProviderSettings]] = {
+            ProviderType.OPENAI: lambda: OpenAISettings(
+                temperature=temperature,
+                top_p=settings.get("top_p", 1.0),
+                max_tokens=settings.get("max_tokens", 1000),
+            ),
+            ProviderType.OLLAMA: lambda: OllamaSettings(
+                temperature=temperature,
+                base_url=settings.get("base_url", "http://localhost:11434"),
+            ),
+        }
+
+        return provider_settings.get(
+            self.name, lambda: BaseProviderSettings(temperature=temperature)
+        )()
 
 
 def get_provider_config(
