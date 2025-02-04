@@ -6,9 +6,9 @@ A tool for creating and managing AI agents. Agent Foundry provides a simple CLI 
 
 - 🔄 Real-time streaming responses
 - 🎯 Simple configuration-based agent creation
-- 🛠️ Debug mode for troubleshooting
+- 🛠️ Multiple LLM provider support
 - 📝 Customizable system prompts
-- 🔌 Plugin system (planned)
+- 🔌 Environment-based configuration
 
 ## Installation
 
@@ -27,27 +27,33 @@ pip install -e .
 
 ## Configuration
 
-Create a `.env` file in your project root with your OpenAI API key:
+Create a `.env` file in your project root with your provider-specific API keys and settings:
 
 ```bash
+# OpenAI Settings
 OPENAI_API_KEY=your_api_key_here
+OPENAI_MODEL=gpt-4  # Optional, defaults to gpt-3.5-turbo
+
+# Ollama Settings (Coming Soon)
+OLLAMA_HOST=http://localhost:11434  # Optional
+OLLAMA_MODEL=llama2  # Optional
 ```
 
 ## Usage
 
 ### Creating an Agent
 
-Create a new agent with an optional name and system prompt:
+Create a new agent with an optional name, provider, and system prompt:
 
 ```bash
-# Create with random ID
-foundry create
+# Create with OpenAI (default)
+foundry create my-agent --provider openai --model gpt-4
 
-# Create with specific name
-foundry create my-agent
+# Create with Ollama (coming soon)
+foundry create llama-agent --provider ollama --model llama2
 
 # Create with custom system prompt
-foundry create my-agent --system-prompt "You are a helpful coding assistant who specializes in Python."
+foundry create my-agent --system-prompt "You are a helpful coding assistant."
 
 # Create with debug mode
 foundry create my-agent --debug
@@ -65,7 +71,7 @@ foundry run my-agent
 foundry run my-agent --debug
 ```
 
-The agent will respond in real-time with streaming output, making the interaction feel more natural and immediate.
+The agent will respond in real-time with streaming output.
 
 ### Listing Agents
 
@@ -98,78 +104,80 @@ agent-foundry/
 ├── agent_foundry/          # Main package
 │   ├── __init__.py
 │   ├── agent.py           # Base agent implementation
-│   ├── cli/               # CLI implementation
+│   ├── providers/         # Provider implementations
+│   │   ├── __init__.py
+│   │   ├── base.py       # Provider interfaces
+│   │   ├── openai.py     # OpenAI provider
+│   │   └── ollama.py     # Ollama provider (coming soon)
+│   ├── cli/              # CLI implementation
 │   │   ├── __init__.py
 │   │   └── commands.py
 │   └── constants.py       # Shared constants
-├── tests/                 # Test suite (87% coverage)
+├── tests/                 # Test suite (84% coverage)
 ├── .env                   # Environment variables (not in repo)
 └── agents/               # Agent storage directory
     └── my-agent/         # Individual agent directory
         └── config.json   # Agent configuration
 ```
 
-## Architecture and Design Philosophy
+## Agent Configuration
 
-Agent Foundry follows a hybrid approach to agent design, balancing simplicity with extensibility:
+Each agent is defined by a `config.json` file with the following structure:
 
-### Core Principles
-
-1. **Declarative First**: Agents are primarily defined through configuration rather than code
-   - Simple JSON configuration files
-   - Easy to share and version control
-   - Lower barrier to entry
-
-2. **Plugin System** (Planned): Extensibility through a plugin architecture
-   - Core functionality in the foundry runtime
-   - Users can extend capabilities through plugins
-   - Plugins can be shared and reused
-
-3. **Real-time Interaction**: Streaming responses for natural conversation
-   - Token-by-token output
-   - Immediate feedback
-   - Better user experience
-
-### Agent Structure
-
-#### Basic Agent (Current)
-```
-agents/my-agent/
-└── config.json           # Agent configuration
-    ├── id               # Unique identifier
-    ├── model           # AI model to use
-    └── system_prompt   # Agent's personality/role
+```json
+{
+  "id": "my-agent",
+  "system_prompt": "You are a helpful AI assistant.",
+  "provider": {
+    "name": "openai",
+    "model": "gpt-4",
+    "settings": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "max_tokens": 1000
+    }
+  }
+}
 ```
 
-#### Extended Agent (Planned)
+### Provider Settings
+
+#### OpenAI
+```json
+{
+  "provider": {
+    "name": "openai",
+    "model": "gpt-4",  // Optional, falls back to OPENAI_MODEL or gpt-3.5-turbo
+    "settings": {
+      "temperature": 0.7,    // Optional, default: 0.7
+      "top_p": 0.95,        // Optional, default: 0.95
+      "max_tokens": 1000    // Optional, default: 1000
+    }
+  }
+}
 ```
-agents/my-agent/
-├── config.json         # Basic configuration
-└── plugins/           # Optional plugin directory
-    └── custom/        # Custom plugin implementations
+
+#### Ollama (Coming Soon)
+```json
+{
+  "provider": {
+    "name": "ollama",
+    "model": "llama2",  // Optional, falls back to OLLAMA_MODEL or llama2
+    "settings": {
+      "temperature": 0.7,      // Optional, default: 0.7
+      "base_url": "http://localhost:11434",  // Optional
+      "context_window": 4096   // Optional, default: 4096
+    }
+  }
+}
 ```
 
-### Design Decisions
+### Environment Variables
 
-1. **Configuration Over Code**
-   - Agents are primarily configuration files
-   - Behavior is controlled by the foundry runtime
-   - Easy to share and version control
-
-2. **Extensible Runtime**
-   - Core functionality in the foundry
-   - Plugin system for custom capabilities
-   - Clean separation of concerns
-
-3. **Progressive Complexity**
-   - Start with simple configuration
-   - Add plugins as needed
-   - No need to write code for basic use cases
-
-4. **Streaming First**
-   - Real-time responses by default
-   - Better user experience
-   - More natural interaction
+Settings precedence order:
+1. Agent config file (highest priority)
+2. Environment variables
+3. Default values (lowest priority)
 
 ## Development
 
@@ -198,21 +206,20 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Project Status
 
 ✅ Core agent functionality
-✅ Basic agent configuration
+✅ OpenAI provider implementation
 ✅ Real-time streaming responses
 ✅ Command-line interface
-✅ Test suite (87% coverage)
-⏳ Plugin system (in progress)
+✅ Test suite (84% coverage)
+⏳ Ollama provider (in progress)
 ⏳ Documentation site
 ⏳ CI/CD pipeline
-⏳ Example agents and use cases
 
 ## Future Plans
 
-- [ ] Complete plugin system implementation
-- [ ] Add more example agents and use cases
+- [ ] Complete Ollama provider implementation
+- [ ] Add per-agent environment variable support
+- [ ] Add more provider implementations (Anthropic, etc.)
+- [ ] Add conversation history persistence
+- [ ] Add plugin system for custom capabilities
 - [ ] Improve test coverage to 90%+
 - [ ] Add comprehensive documentation site
-- [ ] Set up CI/CD pipeline
-- [ ] Add support for more LLM providers
-- [ ] Implement agent memory and persistence

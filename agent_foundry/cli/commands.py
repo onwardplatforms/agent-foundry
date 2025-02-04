@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 from agent_foundry.agent import Agent
 from agent_foundry.constants import AGENTS_DIR, DEFAULT_SYSTEM_PROMPT
+from agent_foundry.providers import ProviderConfig, ProviderType
 
 # Load environment variables from .env file
 load_dotenv()
@@ -32,21 +33,10 @@ def load_agent(agent_id: str) -> Optional[Agent]:
     Returns:
         The loaded agent, or None if not found
     """
-    agent_dir = Path(AGENTS_DIR) / agent_id
-    config_file = agent_dir / "config.json"
-
-    if not config_file.exists():
+    try:
+        return Agent.load(agent_id)
+    except FileNotFoundError:
         return None
-
-    with open(config_file) as f:
-        config = json.load(f)
-
-    return Agent(
-        agent_id=config["id"],
-        system_prompt=config["system_prompt"],
-        model=config["model"],
-        agent_dir=agent_dir,
-    )
 
 
 @click.group()
@@ -62,7 +52,20 @@ def cli() -> None:
     "--system-prompt",
     help=f"Custom system prompt for the agent (default: {DEFAULT_SYSTEM_PROMPT})",
 )
-def create(name: Optional[str], debug: bool, system_prompt: Optional[str]) -> None:
+@click.option(
+    "--provider",
+    type=click.Choice(["openai", "ollama"]),
+    default="openai",
+    help="Provider to use (default: openai)",
+)
+@click.option("--model", help="Model to use (provider-specific)")
+def create(
+    name: Optional[str],
+    debug: bool,
+    system_prompt: Optional[str],
+    provider: str,
+    model: Optional[str],
+) -> None:
     """Create a new agent.
 
     If no name is provided, generates a random ID.
@@ -83,21 +86,19 @@ def create(name: Optional[str], debug: bool, system_prompt: Optional[str]) -> No
         click.echo(f"Error: Agent {agent_id} already exists")
         return
 
-    # Create the agent
-    agent = Agent.create(agent_id=agent_id, system_prompt=system_prompt)
+    # Create provider config
+    provider_config = ProviderConfig(
+        name=ProviderType(provider),
+        model=model,
+        settings=None,  # Use defaults
+    )
 
-    # Create agent directory
-    agent_dir.mkdir(parents=True)
-
-    # Save basic config
-    config = {
-        "id": agent_id,
-        "model": agent.model,
-        "system_prompt": agent.system_prompt,
-    }
-
-    with open(agent_dir / "config.json", "w") as f:
-        json.dump(config, f, indent=2)
+    # Create the agent and save config
+    Agent.create(
+        id=agent_id,
+        system_prompt=system_prompt or DEFAULT_SYSTEM_PROMPT,
+        provider_config=provider_config,
+    )
 
     click.echo(f"Created new agent: {agent_id}")
     click.echo(f"Configuration saved to: {agent_dir}/config.json")
@@ -120,6 +121,7 @@ def async_command(f: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[..., A
     return wrapper
 
 
+@async_command
 async def _run_chat_session(agent: Agent) -> None:
     """Run an interactive chat session with an agent."""
     try:
@@ -131,7 +133,8 @@ async def _run_chat_session(agent: Agent) -> None:
 
             # Process message and get response
             click.echo("\nAgent > ", nl=False)  # Start agent response line
-            await agent.chat(message)  # We don't need to capture the response
+            async for chunk in agent.chat(message):
+                click.echo(chunk.content, nl=False)
             click.echo("\n")  # Add newline after response
 
     except KeyboardInterrupt:
@@ -162,7 +165,7 @@ def run(agent_id: str, debug: bool) -> None:
     click.echo("-" * 40)
 
     # Run the async chat session
-    asyncio.run(_run_chat_session(agent))
+    _run_chat_session(agent)
 
 
 @cli.command()
@@ -179,8 +182,10 @@ def list(verbose: bool) -> None:
                 with open(config_file) as f:
                     config = json.load(f)
                 if verbose:
+                    provider = config.get("provider", {})
                     click.echo(f"  {agent_dir.name}:")
-                    click.echo(f"    Model: {config['model']}")
+                    click.echo(f"    Provider: {provider.get('name', 'openai')}")
+                    click.echo(f"    Model: {provider.get('model', 'default')}")
                     click.echo(f"    System prompt: {config['system_prompt']}")
                 else:
                     click.echo(f"  {agent_dir.name}")

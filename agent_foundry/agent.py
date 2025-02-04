@@ -1,98 +1,127 @@
-"""Base agent implementation for Agent Foundry."""
+"""Agent implementation for Agent Foundry."""
 
+import json
 from pathlib import Path
-from typing import Optional
+from typing import AsyncIterator, Optional
 
-from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
-from semantic_kernel.connectors.ai.prompt_execution_settings import (
-    PromptExecutionSettings,
-)
 from semantic_kernel.contents import ChatHistory, StreamingChatMessageContent
 
-from agent_foundry.constants import AGENTS_DIR, DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT
+from agent_foundry.env import load_env_files
+from agent_foundry.provider_impl import Provider, get_provider
+from agent_foundry.providers import ProviderConfig, ProviderType, get_provider_config
 
 
 class Agent:
-    """Base agent class for chat interactions."""
+    """Agent class for interacting with AI models."""
 
     def __init__(
         self,
-        agent_id: str,
-        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
-        model: str = DEFAULT_MODEL,
-        agent_dir: Optional[Path] = None,
-    ) -> None:
+        id: str,
+        system_prompt: str,
+        provider_config: Optional[ProviderConfig] = None,
+    ):
         """Initialize the agent.
 
         Args:
-            agent_id: Unique identifier for the agent
-            system_prompt: The system message that defines the agent's personality
-            model: The model to use for chat completion
-            agent_dir: Directory where agent files are stored
+            id: Agent ID
+            system_prompt: System prompt for the agent
+            provider_config: Optional provider configuration
         """
-        self.agent_id = agent_id
-        self.model = model
-        self.agent_dir = agent_dir or Path(AGENTS_DIR) / agent_id
-        self._system_prompt = system_prompt
-        self.chat_history = ChatHistory(system_message=system_prompt)
-        self.chat_service = OpenAIChatCompletion(
-            ai_model_id=model,
+        self.id = id
+        self.system_prompt = system_prompt
+
+        # Load environment variables for this agent
+        load_env_files(self.id)
+
+        # Initialize provider
+        if provider_config is None:
+            provider_config = ProviderConfig(name=ProviderType.OPENAI, agent_id=self.id)
+        else:
+            provider_config.agent_id = self.id
+
+        self.provider: Provider = get_provider(provider_config)
+
+    @classmethod
+    def create(
+        cls,
+        id: str,
+        system_prompt: str,
+        provider_config: Optional[ProviderConfig] = None,
+    ) -> "Agent":
+        """Create a new agent.
+
+        Args:
+            id: Agent ID
+            system_prompt: System prompt for the agent
+            provider_config: Optional provider configuration
+
+        Returns:
+            New agent instance
+        """
+        # Create agent directory
+        agent_dir = Path(f".agents/{id}")
+        agent_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create agent config
+        config = {
+            "id": id,
+            "system_prompt": system_prompt,
+            "provider": provider_config.to_dict() if provider_config else None,
+        }
+
+        # Save config
+        config_path = agent_dir / "config.json"
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+
+        return cls(id, system_prompt, provider_config)
+
+    @classmethod
+    def load(cls, id: str) -> "Agent":
+        """Load an existing agent.
+
+        Args:
+            id: Agent ID
+
+        Returns:
+            Loaded agent instance
+
+        Raises:
+            FileNotFoundError: If agent does not exist
+        """
+        # Load agent config
+        config_path = Path(f".agents/{id}/config.json")
+        if not config_path.exists():
+            raise FileNotFoundError(f"Agent {id} does not exist")
+
+        with open(config_path) as f:
+            config = json.load(f)
+
+        # Get provider config
+        provider_config = (
+            get_provider_config(config, id) if config.get("provider") else None
         )
 
-    @property
-    def system_prompt(self) -> str:
-        """Get the system prompt for this agent."""
-        return self._system_prompt
+        return cls(
+            id=config["id"],
+            system_prompt=config["system_prompt"],
+            provider_config=provider_config,
+        )
 
-    async def chat(self, message: str) -> str:
+    async def chat(self, message: str) -> AsyncIterator[StreamingChatMessageContent]:
         """Process a chat message and return the response.
 
         Args:
-            message: The user's message
+            message: User message
 
         Returns:
-            The agent's response
+            Async generator of response chunks
         """
-        self.chat_history.add_user_message(message)
+        # Create chat history
+        history = ChatHistory()
+        history.add_system_message(self.system_prompt)
+        history.add_user_message(message)
 
-        settings = PromptExecutionSettings(
-            service_id=None,  # Use default service
-            extension_data={},  # No additional data needed
-            temperature=0.7,  # Standard temperature for balanced responses
-            top_p=0.95,  # Standard top_p for good diversity
-            max_tokens=1000,  # Reasonable limit for responses
-        )
-
-        response = self.chat_service.get_streaming_chat_message_content(
-            chat_history=self.chat_history,
-            settings=settings,
-        )
-
-        # Capture the chunks of the response and print them as they arrive
-        chunks: list[StreamingChatMessageContent] = []
-        async for chunk in response:
-            if chunk:
-                chunks.append(chunk)
-                print(chunk, end="", flush=True)  # Print each chunk immediately
-
-        # Combine the chunks into a single message
-        full_message = sum(chunks[1:], chunks[0])
-        self.chat_history.add_message(full_message)
-
-        return str(full_message)
-
-    @classmethod
-    def create(cls, agent_id: str, system_prompt: Optional[str] = None) -> "Agent":
-        """Create a new agent with default settings.
-
-        Args:
-            agent_id: Unique identifier for the agent
-            system_prompt: Optional system prompt, uses default if not provided
-
-        Returns:
-            A new Agent instance
-        """
-        return cls(
-            agent_id=agent_id,
-            system_prompt=system_prompt or DEFAULT_SYSTEM_PROMPT,
-        )
+        # Get response from provider
+        async for chunk in self.provider.chat(history):
+            yield chunk
