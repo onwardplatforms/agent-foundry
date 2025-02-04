@@ -2,6 +2,14 @@
 
 A tool for creating and managing AI agents. Agent Foundry provides a simple CLI for creating, managing, and interacting with AI agents.
 
+## Features
+
+- 🔄 Real-time streaming responses
+- 🎯 Simple configuration-based agent creation
+- 🛠️ Debug mode for troubleshooting
+- 📝 Customizable system prompts
+- 🔌 Plugin system (planned)
+
 ## Installation
 
 ```bash
@@ -40,6 +48,9 @@ foundry create my-agent
 
 # Create with custom system prompt
 foundry create my-agent --system-prompt "You are a helpful coding assistant who specializes in Python."
+
+# Create with debug mode
+foundry create my-agent --debug
 ```
 
 ### Running an Agent
@@ -47,8 +58,14 @@ foundry create my-agent --system-prompt "You are a helpful coding assistant who 
 Start an interactive chat session with an agent:
 
 ```bash
+# Basic run
 foundry run my-agent
+
+# Run with debug mode
+foundry run my-agent --debug
 ```
+
+The agent will respond in real-time with streaming output, making the interaction feel more natural and immediate.
 
 ### Listing Agents
 
@@ -67,7 +84,11 @@ foundry list --verbose
 Delete an agent:
 
 ```bash
+# With confirmation prompt
 foundry delete my-agent
+
+# Force delete without confirmation
+foundry delete my-agent --force
 ```
 
 ## Project Structure
@@ -81,7 +102,7 @@ agent-foundry/
 │   │   ├── __init__.py
 │   │   └── commands.py
 │   └── constants.py       # Shared constants
-├── tests/                 # Test suite
+├── tests/                 # Test suite (87% coverage)
 ├── .env                   # Environment variables (not in repo)
 └── agents/               # Agent storage directory
     └── my-agent/         # Individual agent directory
@@ -103,6 +124,11 @@ Agent Foundry follows a hybrid approach to agent design, balancing simplicity wi
    - Core functionality in the foundry runtime
    - Users can extend capabilities through plugins
    - Plugins can be shared and reused
+
+3. **Real-time Interaction**: Streaming responses for natural conversation
+   - Token-by-token output
+   - Immediate feedback
+   - Better user experience
 
 ### Agent Structure
 
@@ -140,6 +166,11 @@ agents/my-agent/
    - Add plugins as needed
    - No need to write code for basic use cases
 
+4. **Streaming First**
+   - Real-time responses by default
+   - Better user experience
+   - More natural interaction
+
 ## Development
 
 ```bash
@@ -164,12 +195,24 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
+## Project Status
+
+✅ Core agent functionality
+✅ Basic agent configuration
+✅ Real-time streaming responses
+✅ Command-line interface
+✅ Test suite (87% coverage)
+⏳ Plugin system (in progress)
+⏳ Documentation site
+⏳ CI/CD pipeline
+⏳ Example agents and use cases
+
 ## Future Plans
 
-- [ ] Implement core agent functionality
-- [ ] Add agent configuration management
-- [ ] Add plugin system
-- [ ] Add documentation site
-- [ ] Add CI/CD pipeline
-- [ ] Add more test coverage
-- [ ] Add example agents and use cases
+- [ ] Complete plugin system implementation
+- [ ] Add more example agents and use cases
+- [ ] Improve test coverage to 90%+
+- [ ] Add comprehensive documentation site
+- [ ] Set up CI/CD pipeline
+- [ ] Add support for more LLM providers
+- [ ] Implement agent memory and persistence

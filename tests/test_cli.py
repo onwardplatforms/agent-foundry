@@ -3,7 +3,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Generator
+from typing import Any, Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -90,10 +90,15 @@ def test_run_command(runner: CliRunner, tmp_path: Path) -> None:
         result = runner.invoke(cli, ["create", "test-agent"])
         assert result.exit_code == 0
 
-        # Test running the agent
-        result = runner.invoke(cli, ["run", "test-agent"], input="exit\n")
-        assert result.exit_code == 0
-        assert "Starting session with agent: test-agent" in result.output
+        # Mock the chat method to avoid actual API calls
+        async def mock_async_chat(*args: Any, **kwargs: Any) -> str:
+            return "Test response"
+
+        with patch("agent_foundry.agent.Agent.chat", mock_async_chat):
+            # Test running the agent
+            result = runner.invoke(cli, ["run", "test-agent"], input="exit\n")
+            assert result.exit_code == 0
+            assert "Starting session with agent: test-agent" in result.output
 
 
 def test_list_command_verbose(runner: CliRunner, tmp_path: Path) -> None:

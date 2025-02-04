@@ -4,7 +4,7 @@ import asyncio
 import json
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Coroutine, Optional
 
 import click
 from dotenv import load_dotenv
@@ -103,6 +103,45 @@ def create(name: Optional[str], debug: bool, system_prompt: Optional[str]) -> No
     click.echo(f"Configuration saved to: {agent_dir}/config.json")
 
 
+# Async wrapper for Click commands
+def async_command(f: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[..., Any]:
+    """Wrap a coroutine to make it compatible with Click commands.
+
+    Args:
+        f: The coroutine function to wrap
+
+    Returns:
+        A synchronous function that runs the coroutine
+    """
+
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        return asyncio.run(f(*args, **kwargs))
+
+    return wrapper
+
+
+async def _run_chat_session(agent: Agent) -> None:
+    """Run an interactive chat session with an agent."""
+    try:
+        while True:
+            # Get user input
+            message = click.prompt("You", prompt_suffix=" > ")
+            if message.lower() == "exit":
+                break
+
+            # Process message and get response
+            click.echo("\nAgent > ", nl=False)  # Start agent response line
+            await agent.chat(message)  # We don't need to capture the response
+            click.echo("\n")  # Add newline after response
+
+    except KeyboardInterrupt:
+        click.echo("\nSession ended by user")
+    except Exception as e:
+        click.echo(f"\nError: {e}")
+    finally:
+        click.echo("\nSession ended")
+
+
 @cli.command()
 @click.argument("agent_id")
 @click.option("--debug", is_flag=True, help="Enable debug mode")
@@ -122,27 +161,8 @@ def run(agent_id: str, debug: bool) -> None:
     click.echo("Type your message and press Enter to send")
     click.echo("-" * 40)
 
-    # Create event loop for async chat
-    loop = asyncio.get_event_loop()
-
-    try:
-        while True:
-            # Get user input
-            message = click.prompt("You", prompt_suffix=" > ")
-            if message.lower() == "exit":
-                break
-
-            # Process message and get response
-            click.echo("\nAgent is thinking...\n")
-            response = loop.run_until_complete(agent.chat(message))
-            click.echo(f"Agent > {response}\n")
-
-    except KeyboardInterrupt:
-        click.echo("\nSession ended by user")
-    except Exception as e:
-        click.echo(f"\nError: {e}")
-    finally:
-        click.echo("\nSession ended")
+    # Run the async chat session
+    asyncio.run(_run_chat_session(agent))
 
 
 @cli.command()

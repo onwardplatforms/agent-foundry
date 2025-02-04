@@ -68,12 +68,12 @@ class Agent:
             settings=settings,
         )
 
-        # Capture the chunks of the response
+        # Capture the chunks of the response and print them as they arrive
         chunks: list[StreamingChatMessageContent] = []
         async for chunk in response:
             if chunk:
                 chunks.append(chunk)
-                # Note: In CLI we'll handle printing separately
+                print(chunk, end="", flush=True)  # Print each chunk immediately
 
         # Combine the chunks into a single message
         full_message = sum(chunks[1:], chunks[0])
