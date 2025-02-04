@@ -11,9 +11,8 @@ def load_env_files(agent_id: Optional[str] = None) -> None:
     """Load environment variables from .env files.
 
     Order of precedence (highest to lowest):
-    1. System environment variables
-    2. Agent-specific .env file (if agent_id provided)
-    3. Root .env file
+    1. Agent-specific .env file (if agent_id provided)
+    2. Root .env file
 
     Args:
         agent_id: Optional agent ID to load agent-specific env file
@@ -23,7 +22,7 @@ def load_env_files(agent_id: Optional[str] = None) -> None:
     if root_env.exists():
         load_dotenv(root_env)
 
-    # Load agent-specific .env file if provided
+    # Load agent-specific .env file if provided (highest precedence)
     if agent_id:
         agent_env = Path(f".agents/{agent_id}/.env")
         if agent_env.exists():
@@ -36,10 +35,9 @@ def get_env_var(
     """Get environment variable with proper precedence.
 
     Order of precedence (highest to lowest):
-    1. System environment variables
-    2. Agent-specific .env file (if agent_id provided)
-    3. Root .env file
-    4. Default value
+    1. Agent-specific .env file (if agent_id provided)
+    2. Root .env file
+    3. Default value
 
     Args:
         key: Environment variable key
@@ -52,5 +50,10 @@ def get_env_var(
     # Load env files if agent_id provided
     if agent_id:
         load_env_files(agent_id)
+    else:
+        # Load just root .env if no agent_id
+        root_env = Path(".env")
+        if root_env.exists():
+            load_dotenv(root_env)
 
     return os.getenv(key, default)

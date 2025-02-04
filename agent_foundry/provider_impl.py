@@ -66,22 +66,12 @@ class OpenAIProvider(Provider):
             raise ValueError("Invalid settings type for OpenAI provider")
 
         # Get model from config, env, or default
-        if self.agent_id:
-            # Use agent-specific environment variable if agent_id is set
-            env_model = get_env_var(
-                "AGENT_FOUNDRY_OPENAI_MODEL",
-                "",
-                self.agent_id,
-            )
-            self.model = env_model or config.model or "gpt-3.5-turbo"
-        else:
-            # Use global environment variable if no agent_id
-            env_model = get_env_var(
-                "OPENAI_MODEL",
-                "",
-                None,
-            )
-            self.model = env_model or config.model or "gpt-3.5-turbo"
+        env_model = get_env_var(
+            "OPENAI_MODEL",
+            "",
+            self.agent_id,
+        )
+        self.model = env_model or config.model or "gpt-3.5-turbo"
 
         # Initialize OpenAI client
         self.client = OpenAIChatCompletion(ai_model_id=self.model)
@@ -128,31 +118,17 @@ class OllamaProvider(Provider):
         Raises:
             RuntimeError: If Ollama server is not running or not accessible
         """
-        # Get model and base URL from environment variables first
-        if config.agent_id:
-            # Use agent-specific environment variables if agent_id is set
-            env_model = get_env_var(
-                "AGENT_FOUNDRY_OLLAMA_MODEL",
-                "",
-                config.agent_id,
-            )
-            env_base_url = get_env_var(
-                "AGENT_FOUNDRY_OLLAMA_BASE_URL",
-                "",
-                config.agent_id,
-            )
-        else:
-            # Use global environment variables if no agent_id
-            env_model = get_env_var(
-                "OLLAMA_MODEL",
-                "",
-                None,
-            )
-            env_base_url = get_env_var(
-                "OLLAMA_BASE_URL",
-                "",
-                None,
-            )
+        # Get model and base URL from environment variables
+        env_model = get_env_var(
+            "OLLAMA_MODEL",
+            "",
+            config.agent_id,
+        )
+        env_base_url = get_env_var(
+            "OLLAMA_BASE_URL",
+            "",
+            config.agent_id,
+        )
 
         # Set model from environment or config or default
         self.model = env_model or config.model or "llama2"

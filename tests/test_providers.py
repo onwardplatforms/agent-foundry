@@ -1,6 +1,7 @@
 """Test provider implementations."""
 
 import json
+from pathlib import Path
 from typing import Any, AsyncIterator
 from unittest.mock import MagicMock, patch
 
@@ -53,11 +54,7 @@ class TestOpenAIProvider:
     def test_init(self, openai_config: ProviderConfig) -> None:
         """Test provider initialization."""
         # Clear environment variables
-        env = {
-            "OPENAI_MODEL": "",
-            "AGENT_FOUNDRY_OPENAI_MODEL": "",
-        }
-        with patch.dict("os.environ", env, clear=True):
+        with patch.dict("os.environ", {}, clear=True):
             provider = OpenAIProvider(openai_config)
             assert provider.model == "gpt-3.5-turbo"
             assert isinstance(provider.settings, OpenAISettings)
@@ -65,23 +62,37 @@ class TestOpenAIProvider:
             assert provider.settings.top_p == 1.0
             assert provider.settings.max_tokens == 1000
 
-    def test_init_with_env(self, openai_config: ProviderConfig) -> None:
+    def test_init_with_env(self, openai_config: ProviderConfig, tmp_path: Path) -> None:
         """Test provider initialization with environment variables."""
-        env = {
-            "OPENAI_MODEL": "gpt-4",
-            "AGENT_FOUNDRY_OPENAI_MODEL": "gpt-4-turbo",
-        }
-        with patch.dict("os.environ", env):
-            # No agent ID - use OPENAI_MODEL
+        # Create root .env
+        root_env = tmp_path / ".env"
+        root_env.write_text("OPENAI_MODEL=gpt-4\n")
+
+        # Create agent-specific .env
+        agent_dir = tmp_path / ".agents" / "test-agent"
+        agent_dir.mkdir(parents=True)
+        agent_env = agent_dir / ".env"
+        agent_env.write_text("OPENAI_MODEL=gpt-4-turbo\n")
+
+        with patch("agent_foundry.env.Path") as mock_path:
+
+            def path_side_effect(path: str) -> Path:
+                if path == ".env":
+                    return root_env
+                return tmp_path / path
+
+            mock_path.side_effect = path_side_effect
+
+            # No agent ID - use root .env
             provider = OpenAIProvider(openai_config)
             assert provider.model == "gpt-4"
 
-            # With agent ID - use AGENT_FOUNDRY_OPENAI_MODEL
+            # With agent ID - use agent .env
             config = ProviderConfig(
                 name=ProviderType.OPENAI,
                 model=None,
                 settings={"temperature": 0.5},
-                agent_id="test",
+                agent_id="test-agent",
             )
             provider = OpenAIProvider(config)
             assert provider.model == "gpt-4-turbo"
@@ -121,13 +132,7 @@ class TestOllamaProvider:
     def test_init(self, ollama_config: ProviderConfig) -> None:
         """Test provider initialization."""
         # Clear environment variables
-        env = {
-            "OLLAMA_MODEL": "",
-            "AGENT_FOUNDRY_OLLAMA_MODEL": "",
-            "OLLAMA_BASE_URL": "",
-            "AGENT_FOUNDRY_OLLAMA_BASE_URL": "",
-        }
-        with patch.dict("os.environ", env, clear=True):
+        with patch.dict("os.environ", {}, clear=True):
             # Mock the server check
             mock_response = MagicMock()
             mock_response.json.return_value = {"version": "0.5.0"}
@@ -140,43 +145,63 @@ class TestOllamaProvider:
 
     def test_init_server_not_running(self, ollama_config: ProviderConfig) -> None:
         """Test provider initialization when server is not running."""
-        with patch("requests.get", side_effect=requests.exceptions.ConnectionError()):
-            with pytest.raises(RuntimeError, match="Ollama server not running"):
-                OllamaProvider(ollama_config)
+        with patch.dict("os.environ", {}, clear=True):
+            with patch(
+                "requests.get", side_effect=requests.exceptions.ConnectionError()
+            ):
+                with pytest.raises(RuntimeError, match="Ollama server not running"):
+                    OllamaProvider(ollama_config)
 
     def test_init_invalid_response(self, ollama_config: ProviderConfig) -> None:
         """Test provider initialization with invalid server response."""
-        mock_response = MagicMock()
-        mock_response.json.return_value = {}
-        with patch("requests.get", return_value=mock_response):
-            with pytest.raises(RuntimeError, match="invalid version response"):
-                OllamaProvider(ollama_config)
+        with patch.dict("os.environ", {}, clear=True):
+            mock_response = MagicMock()
+            mock_response.json.return_value = {}
+            with patch("requests.get", return_value=mock_response):
+                with pytest.raises(RuntimeError, match="invalid version response"):
+                    OllamaProvider(ollama_config)
 
-    def test_init_with_env(self, ollama_config: ProviderConfig) -> None:
+    def test_init_with_env(self, ollama_config: ProviderConfig, tmp_path: Path) -> None:
         """Test provider initialization with environment variables."""
-        env = {
-            "OLLAMA_MODEL": "mistral",
-            "AGENT_FOUNDRY_OLLAMA_MODEL": "codellama",
-            "OLLAMA_BASE_URL": "http://test:11434",
-            "AGENT_FOUNDRY_OLLAMA_BASE_URL": "http://agent:11434",
-        }
-        with patch.dict("os.environ", env):
+        # Create root .env
+        root_env = tmp_path / ".env"
+        root_env.write_text(
+            "OLLAMA_MODEL=mistral\n" "OLLAMA_BASE_URL=http://test:11434\n"
+        )
+
+        # Create agent-specific .env
+        agent_dir = tmp_path / ".agents" / "test-agent"
+        agent_dir.mkdir(parents=True)
+        agent_env = agent_dir / ".env"
+        agent_env.write_text(
+            "OLLAMA_MODEL=codellama\n" "OLLAMA_BASE_URL=http://agent:11434\n"
+        )
+
+        with patch("agent_foundry.env.Path") as mock_path:
+
+            def path_side_effect(path: str) -> Path:
+                if path == ".env":
+                    return root_env
+                return tmp_path / path
+
+            mock_path.side_effect = path_side_effect
+
             # Mock the server check
             mock_response = MagicMock()
             mock_response.json.return_value = {"version": "0.5.0"}
             with patch("requests.get", return_value=mock_response):
-                # No agent ID - use OLLAMA_MODEL and OLLAMA_BASE_URL
+                # No agent ID - use root .env
                 provider = OllamaProvider(ollama_config)
                 assert provider.model == "mistral"
                 assert isinstance(provider.settings, OllamaSettings)
                 assert provider.settings.base_url == "http://test:11434"
 
-                # With agent ID - use AGENT_FOUNDRY_OLLAMA_MODEL
+                # With agent ID - use agent .env
                 config = ProviderConfig(
                     name=ProviderType.OLLAMA,
                     model=None,
                     settings={"temperature": 0.5},
-                    agent_id="test",
+                    agent_id="test-agent",
                 )
                 provider = OllamaProvider(config)
                 assert provider.model == "codellama"
@@ -188,7 +213,9 @@ class TestOllamaProvider:
         self, ollama_config: ProviderConfig, chat_history: ChatHistory
     ) -> None:
         """Test chat functionality."""
-        with patch.dict("os.environ", {"OLLAMA_BASE_URL": "http://test:11434"}):
+        with patch.dict(
+            "os.environ", {"OLLAMA_BASE_URL": "http://test:11434"}, clear=True
+        ):
             # Mock the server check
             mock_response = MagicMock()
             mock_response.json.return_value = {"version": "0.5.0"}

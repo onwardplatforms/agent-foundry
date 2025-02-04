@@ -30,8 +30,14 @@ pip install -e .
 
 You can configure environment variables at two levels:
 
-1. Project-wide: Create a `.env` file in your project root
-2. Per-agent: Create a `.env` file in `.agents/<agent_id>/.env`
+1. Agent-specific: Create a `.env` file in `.agents/<agent_id>/.env`
+2. Project-wide: Create a `.env` file in your project root
+
+Environment variables follow a simple waterfall pattern, where more specific settings override more general ones:
+1. Agent's `.env` file (highest priority)
+2. Agent's `config.json` values
+3. Global `.env` file
+4. Default values (lowest priority)
 
 Example `.env` files:
 
@@ -39,19 +45,22 @@ Example `.env` files:
 # Project-wide .env
 OPENAI_API_KEY=your_api_key_here
 OPENAI_MODEL=gpt-4  # Optional, defaults to gpt-3.5-turbo
-AGENT_FOUNDRY_OPENAI_MODEL=gpt-4-turbo  # Optional, agent-specific model
 
 # Ollama Settings
 OLLAMA_BASE_URL=http://localhost:11434  # Optional
 OLLAMA_MODEL=llama2  # Optional
-AGENT_FOUNDRY_OLLAMA_MODEL=codellama  # Optional, agent-specific model
-AGENT_FOUNDRY_OLLAMA_BASE_URL=http://custom:11434  # Optional, agent-specific URL
 ```
 
 ```bash
-# Per-agent .env (.agents/my-agent/.env)
-AGENT_FOUNDRY_OPENAI_MODEL=gpt-4  # Override model just for this agent
+# Agent-specific .env (.agents/my-agent/.env)
+OPENAI_MODEL=gpt-4  # Override model just for this agent
+OPENAI_API_KEY=agent-specific-key  # Use different API key for this agent
 ```
+
+This approach allows you to:
+- Set default values in your project's root `.env`
+- Override settings for specific agents in their `.env` files
+- Keep sensitive information (like API keys) separate for different agents
 
 ## Usage
 
