@@ -6,9 +6,9 @@ A tool for creating and managing AI agents. Agent Foundry provides a simple CLI 
 
 - 🔄 Real-time streaming responses
 - 🎯 Simple configuration-based agent creation
-- 🛠️ Multiple LLM provider support
+- 🛠️ Multiple LLM provider support (OpenAI, Ollama)
 - 📝 Customizable system prompts
-- 🔌 Environment-based configuration
+- 🔌 Per-agent environment configuration
 
 ## Installation
 
@@ -27,16 +27,26 @@ pip install -e .
 
 ## Configuration
 
-Create a `.env` file in your project root with your provider-specific API keys and settings:
+You can configure environment variables at two levels:
+
+1. Project-wide: Create a `.env` file in your project root
+2. Per-agent: Create a `.env` file in `.agents/<agent_id>/.env`
+
+Example `.env` files:
 
 ```bash
-# OpenAI Settings
+# Project-wide .env
 OPENAI_API_KEY=your_api_key_here
 OPENAI_MODEL=gpt-4  # Optional, defaults to gpt-3.5-turbo
 
-# Ollama Settings (Coming Soon)
+# Ollama Settings
 OLLAMA_HOST=http://localhost:11434  # Optional
 OLLAMA_MODEL=llama2  # Optional
+```
+
+```bash
+# Per-agent .env (.agents/my-agent/.env)
+OPENAI_MODEL=gpt-4  # Override model just for this agent
 ```
 
 ## Usage
@@ -49,7 +59,7 @@ Create a new agent with an optional name, provider, and system prompt:
 # Create with OpenAI (default)
 foundry create my-agent --provider openai --model gpt-4
 
-# Create with Ollama (coming soon)
+# Create with Ollama
 foundry create llama-agent --provider ollama --model llama2
 
 # Create with custom system prompt
@@ -103,21 +113,20 @@ foundry delete my-agent --force
 agent-foundry/
 ├── agent_foundry/          # Main package
 │   ├── __init__.py
-│   ├── agent.py           # Base agent implementation
-│   ├── providers/         # Provider implementations
-│   │   ├── __init__.py
-│   │   ├── base.py       # Provider interfaces
-│   │   ├── openai.py     # OpenAI provider
-│   │   └── ollama.py     # Ollama provider (coming soon)
+│   ├── agent.py           # Agent implementation
+│   ├── provider_impl.py   # Provider implementations
+│   ├── providers.py       # Provider definitions
+│   ├── env.py            # Environment handling
 │   ├── cli/              # CLI implementation
 │   │   ├── __init__.py
 │   │   └── commands.py
 │   └── constants.py       # Shared constants
-├── tests/                 # Test suite (84% coverage)
-├── .env                   # Environment variables (not in repo)
-└── agents/               # Agent storage directory
+├── tests/                 # Test suite (83% coverage)
+├── .env                   # Global environment variables
+└── .agents/              # Agent storage directory
     └── my-agent/         # Individual agent directory
-        └── config.json   # Agent configuration
+        ├── config.json   # Agent configuration
+        └── .env          # Agent-specific environment
 ```
 
 ## Agent Configuration
@@ -157,7 +166,7 @@ Each agent is defined by a `config.json` file with the following structure:
 }
 ```
 
-#### Ollama (Coming Soon)
+#### Ollama
 ```json
 {
   "provider": {
@@ -174,10 +183,11 @@ Each agent is defined by a `config.json` file with the following structure:
 
 ### Environment Variables
 
-Settings precedence order:
-1. Agent config file (highest priority)
-2. Environment variables
-3. Default values (lowest priority)
+Settings precedence order (highest to lowest):
+1. System environment variables
+2. Agent-specific `.env` file (if exists)
+3. Project-wide `.env` file
+4. Default values
 
 ## Development
 
@@ -207,17 +217,16 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ✅ Core agent functionality
 ✅ OpenAI provider implementation
+✅ Ollama provider implementation
 ✅ Real-time streaming responses
 ✅ Command-line interface
-✅ Test suite (84% coverage)
-⏳ Ollama provider (in progress)
+✅ Per-agent environment variables
+✅ Test suite (83% coverage)
 ⏳ Documentation site
 ⏳ CI/CD pipeline
 
 ## Future Plans
 
-- [ ] Complete Ollama provider implementation
-- [ ] Add per-agent environment variable support
 - [ ] Add more provider implementations (Anthropic, etc.)
 - [ ] Add conversation history persistence
 - [ ] Add plugin system for custom capabilities
