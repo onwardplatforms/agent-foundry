@@ -1,3 +1,0 @@
-"""
-Foundry Plugins Package
-""" 

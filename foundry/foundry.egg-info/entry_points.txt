@@ -1,2 +1,0 @@
-[console_scripts]
-foundry = foundry.cli:cli

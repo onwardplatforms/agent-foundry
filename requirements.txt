@@ -1,4 +1,4 @@
 click
-semantic-kernel
+openai
 python-dotenv
--e . 
+uuid 

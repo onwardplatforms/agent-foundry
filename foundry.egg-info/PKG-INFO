@@ -1,7 +1,0 @@
-Metadata-Version: 2.2
-Name: foundry
-Version: 0.1
-Requires-Dist: Click
-Requires-Dist: semantic-kernel
-Requires-Dist: python-dotenv
-Dynamic: requires-dist
