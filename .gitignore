@@ -23,6 +23,7 @@ wheels/
 # Virtual Environment
 venv/
 ENV/
+env/
 
 # IDE
 .idea/
@@ -30,13 +31,23 @@ ENV/
 *.swp
 *.swo
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Environment variables
+# Environment Variables
 .env
+.env.*
 
-# Agent data
-agents/
+# Agent Foundry specific
 .agents/
+
+# Coverage
+.coverage
+htmlcov/
+coverage.xml
+
+# MyPy
+.mypy_cache/
+
+# pytest
+.pytest_cache/
+
+# Logs
+*.log
