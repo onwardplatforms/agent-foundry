@@ -19,7 +19,7 @@ help:
 	@echo "  make install-dev - Install development dependencies"
 	@echo "  make clean       - Remove virtual environment and cache files"
 	@echo "  make test        - Run tests with coverage"
-	@echo "  make lint        - Run linters (flake8)"
+	@echo "  make lint        - Run linters (flake8, isort)"
 	@echo "  make format      - Format code (black, isort)"
 	@echo "  make check       - Run type checking (mypy)"
 	@echo "  make all         - Run all checks (format, lint, type check, test)"
@@ -50,6 +50,8 @@ test:
 	source $(VENV)/bin/activate && $(PYTEST) tests/ -v --cov=. --cov-report=term-missing
 
 lint:
+	source $(VENV)/bin/activate && $(BLACK) --check .
+	source $(VENV)/bin/activate && $(ISORT) --check .
 	source $(VENV)/bin/activate && $(FLAKE8) .
 
 format:

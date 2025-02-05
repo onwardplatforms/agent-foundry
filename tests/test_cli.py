@@ -85,7 +85,7 @@ def test_create_with_custom_system_prompt(runner: CliRunner, tmp_path: Path) -> 
 def test_create_with_debug_flag(runner: CliRunner, tmp_path: Path) -> None:
     """Test that create command works with debug flag."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
-        result = runner.invoke(cli, ["create", "--debug"])
+        result = runner.invoke(cli, ["--debug", "create"])
         assert result.exit_code == 0
         assert "Debug mode enabled" in result.output
         assert "Created new agent:" in result.output

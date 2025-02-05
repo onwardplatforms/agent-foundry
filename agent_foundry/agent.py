@@ -1,19 +1,20 @@
 """Agent implementation for Agent Foundry."""
 
 import json
+import logging
 from pathlib import Path
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Optional, Union
 
+from semantic_kernel import Kernel
+from semantic_kernel.connectors.ai.ollama import OllamaChatCompletion
+from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
+from semantic_kernel.connectors.ai.prompt_execution_settings import (
+    PromptExecutionSettings,
+)
 from semantic_kernel.contents import ChatHistory, StreamingChatMessageContent
 
 from agent_foundry.env import load_env_files
-from agent_foundry.providers import (
-    Provider,
-    ProviderConfig,
-    ProviderType,
-    get_provider,
-    get_provider_config,
-)
+from agent_foundry.providers import ProviderConfig, ProviderType, get_provider_config
 
 
 class Agent:
@@ -34,17 +35,42 @@ class Agent:
         """
         self.id = id
         self.system_prompt = system_prompt
+        self.logger = logging.getLogger("agent_foundry")
 
         # Load environment variables for this agent
         load_env_files(self.id)
 
-        # Initialize provider
+        # Initialize provider config
         if provider_config is None:
             provider_config = ProviderConfig(name=ProviderType.OPENAI, agent_id=self.id)
         else:
             provider_config.agent_id = self.id
 
-        self.provider: Provider = get_provider(provider_config)
+        # Initialize kernel and chat completion service based on provider
+        self.kernel = Kernel()
+        self.chat_service: Union[OpenAIChatCompletion, OllamaChatCompletion]
+
+        if provider_config.name == ProviderType.OPENAI:
+            self.logger.debug(
+                "Initializing OpenAI service with model: %s", provider_config.model
+            )
+            self.chat_service = OpenAIChatCompletion(
+                ai_model_id=provider_config.model or "gpt-3.5-turbo"
+            )
+        elif provider_config.name == ProviderType.OLLAMA:
+            self.logger.debug(
+                "Initializing Ollama service with model: %s", provider_config.model
+            )
+            # Note: Ollama settings are handled through environment variables
+            self.chat_service = OllamaChatCompletion(
+                ai_model_id=provider_config.model or "llama2"
+            )
+
+        # Add chat service to kernel
+        self.kernel.add_service(self.chat_service)
+
+        # Store config for settings
+        self.provider_config = provider_config
 
     @classmethod
     def create(
@@ -122,11 +148,27 @@ class Agent:
         Returns:
             Async generator of response chunks
         """
+        self.logger.debug("Processing chat message: %s", message)
+
         # Create chat history
         history = ChatHistory()
         history.add_system_message(self.system_prompt)
         history.add_user_message(message)
 
-        # Get response from provider
-        async for chunk in self.provider.chat(history):
-            yield chunk
+        # Convert provider settings to prompt execution settings
+        settings = self.provider_config.get_settings()
+        execution_settings = PromptExecutionSettings(
+            service_id=None,
+            extension_data={},
+            temperature=settings.temperature,
+            top_p=getattr(settings, "top_p", 1.0),
+            max_tokens=getattr(settings, "max_tokens", None),
+        )
+
+        # Get response using the service
+        async for chunk in self.chat_service.get_streaming_chat_message_content(
+            chat_history=history,
+            settings=execution_settings,
+        ):
+            if chunk is not None:
+                yield chunk

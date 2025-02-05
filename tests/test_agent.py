@@ -2,18 +2,15 @@
 
 import json
 from pathlib import Path
-from typing import AsyncIterator, Generator
-from unittest.mock import patch
+from typing import Generator
+from unittest.mock import create_autospec, patch
 
 import pytest
-from semantic_kernel.contents import (
-    AuthorRole,
-    ChatHistory,
-    StreamingChatMessageContent,
-)
+from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
+from semantic_kernel.contents import AuthorRole, StreamingChatMessageContent
 
 from agent_foundry.agent import Agent
-from agent_foundry.providers import Provider, ProviderConfig, ProviderType
+from agent_foundry.providers import ProviderConfig, ProviderType
 
 
 @pytest.fixture
@@ -34,46 +31,36 @@ def mock_config() -> ProviderConfig:
     )
 
 
-class MockProvider(Provider):
-    """Mock provider for testing."""
-
-    async def chat(
-        self, history: ChatHistory
-    ) -> AsyncIterator[StreamingChatMessageContent]:
-        """Mock chat method."""
-        yield StreamingChatMessageContent(
-            role=AuthorRole.ASSISTANT,
-            content="Mock response",
-            choice_index=0,
-        )
-
-
 def test_agent_init(mock_config: ProviderConfig) -> None:
     """Test agent initialization."""
     with patch("agent_foundry.agent.load_env_files") as mock_load_env:
-        with patch("agent_foundry.agent.get_provider") as mock_get_provider:
-            mock_get_provider.return_value = MockProvider(mock_config)
+        with patch("agent_foundry.agent.OpenAIChatCompletion") as mock_service_class:
+            # Create a properly typed mock service
+            mock_service = create_autospec(OpenAIChatCompletion)
+            mock_service.service_id = "openai-chat"
+            mock_service_class.return_value = mock_service
 
             agent = Agent("test-agent", "Test prompt", mock_config)
             assert agent.id == "test-agent"
             assert agent.system_prompt == "Test prompt"
-            assert isinstance(agent.provider, MockProvider)
+            assert isinstance(agent.chat_service, OpenAIChatCompletion)
 
             mock_load_env.assert_called_once_with("test-agent")
-            mock_get_provider.assert_called_once()
+            mock_service_class.assert_called_once_with(ai_model_id="gpt-4")
 
 
 def test_agent_init_default_provider() -> None:
     """Test agent initialization with default provider."""
     with patch("agent_foundry.agent.load_env_files"):
-        with patch("agent_foundry.agent.get_provider") as mock_get_provider:
-            mock_get_provider.return_value = MockProvider(
-                ProviderConfig(name=ProviderType.OPENAI)
-            )
+        with patch("agent_foundry.agent.OpenAIChatCompletion") as mock_service_class:
+            # Create a properly typed mock service
+            mock_service = create_autospec(OpenAIChatCompletion)
+            mock_service.service_id = "openai-chat"
+            mock_service_class.return_value = mock_service
 
             agent = Agent("test-agent", "Test prompt")
-            assert isinstance(agent.provider, MockProvider)
-            mock_get_provider.assert_called_once()
+            assert isinstance(agent.chat_service, OpenAIChatCompletion)
+            mock_service_class.assert_called_once_with(ai_model_id="gpt-3.5-turbo")
 
 
 def test_agent_create(mock_agent_dir: Path, mock_config: ProviderConfig) -> None:
@@ -112,38 +99,53 @@ def test_agent_load(mock_agent_dir: Path) -> None:
 
     with patch("agent_foundry.agent.Path") as mock_path:
         mock_path.return_value = config_file
-        with patch("agent_foundry.agent.get_provider") as mock_get_provider:
-            mock_get_provider.return_value = MockProvider(
-                ProviderConfig(name=ProviderType.OPENAI)
-            )
+        with patch("agent_foundry.agent.OpenAIChatCompletion") as mock_service_class:
+            # Create a properly typed mock service
+            mock_service = create_autospec(OpenAIChatCompletion)
+            mock_service.service_id = "openai-chat"
+            mock_service_class.return_value = mock_service
 
             agent = Agent.load("test-agent")
             assert agent.id == "test-agent"
             assert agent.system_prompt == "Test prompt"
-            assert isinstance(agent.provider, MockProvider)
+            mock_service_class.assert_called_once_with(ai_model_id="gpt-4")
 
 
-def test_agent_load_not_found(mock_agent_dir: Path) -> None:
-    """Test loading non-existent agent."""
-    with patch("agent_foundry.agent.Path") as mock_path:
-        mock_path.return_value = mock_agent_dir / "nonexistent" / "config.json"
-        with pytest.raises(FileNotFoundError):
-            Agent.load("nonexistent")
+def test_agent_load_not_found() -> None:
+    """Test agent loading when agent does not exist."""
+    with pytest.raises(FileNotFoundError):
+        Agent.load("nonexistent-agent")
 
 
 @pytest.mark.asyncio
 async def test_agent_chat(mock_config: ProviderConfig) -> None:
     """Test agent chat functionality."""
     with patch("agent_foundry.agent.load_env_files"):
-        with patch("agent_foundry.agent.get_provider") as mock_get_provider:
-            mock_provider = MockProvider(mock_config)
-            mock_get_provider.return_value = mock_provider
+        with patch("agent_foundry.agent.OpenAIChatCompletion") as mock_service_class:
+            # Create a properly typed mock service
+            mock_service = create_autospec(OpenAIChatCompletion, instance=True)
+            mock_service.service_id = "openai-chat"
+            mock_service_class.return_value = mock_service
 
+            # Set up the mock response
+            mock_response = StreamingChatMessageContent(
+                role=AuthorRole.ASSISTANT,
+                content="Mock response",
+                choice_index=0,
+            )
+
+            # Create an async iterator for the response
+            async def mock_stream():
+                yield mock_response
+
+            # Set up the mock to return our async iterator
+            mock_service.get_streaming_chat_message_content.return_value = mock_stream()
+
+            # Create agent and test chat
             agent = Agent("test-agent", "Test prompt", mock_config)
-            chunks = []
-            async for chunk in agent.chat("Hello!"):
-                chunks.append(chunk)
+            response = [chunk async for chunk in agent.chat("Hello")]
+            assert len(response) == 1
+            assert response[0].content == "Mock response"
 
-            assert len(chunks) == 1
-            assert chunks[0].content == "Mock response"
-            assert chunks[0].role == AuthorRole.ASSISTANT
+            # Verify the service was called correctly
+            assert mock_service.get_streaming_chat_message_content.called

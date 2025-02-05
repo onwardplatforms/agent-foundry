@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional
@@ -15,6 +16,15 @@ from agent_foundry.providers import ProviderConfig, ProviderType
 
 # Load environment variables from .env file
 load_dotenv()
+
+
+def set_debug_logging(debug: bool) -> None:
+    """Set debug logging level if debug flag is True."""
+    if debug:
+        # Set debug logging for both our package and kernel
+        logging.getLogger("agent_foundry").setLevel(logging.DEBUG)
+        logging.getLogger("kernel").setLevel(logging.DEBUG)
+        click.echo("Debug mode enabled - logging set to DEBUG level")
 
 
 def ensure_agents_dir() -> Path:
@@ -41,14 +51,14 @@ def load_agent(agent_id: str) -> Optional[Agent]:
 
 @click.group()
 @click.version_option()
-def cli() -> None:
+@click.option("--debug", is_flag=True, help="Enable debug mode with verbose logging")
+def cli(debug: bool) -> None:
     """Create and manage AI agents."""
-    pass
+    set_debug_logging(debug)
 
 
 @cli.command()
 @click.argument("name", required=False)
-@click.option("--debug", is_flag=True, help="Enable debug mode")
 @click.option(
     "--system-prompt",
     help=f"Custom system prompt for the agent (default: {DEFAULT_SYSTEM_PROMPT})",
@@ -62,7 +72,6 @@ def cli() -> None:
 @click.option("--model", help="Model to use (provider-specific)")
 def create(
     name: Optional[str],
-    debug: bool,
     system_prompt: Optional[str],
     provider: str,
     model: Optional[str],
@@ -73,8 +82,13 @@ def create(
     If no system prompt is provided, uses the default:
     "{DEFAULT_SYSTEM_PROMPT}"
     """
-    if debug:
-        click.echo("Debug mode enabled")
+    logger = logging.getLogger("agent_foundry")
+    logger.debug(
+        "Creating new agent with parameters: name=%s, provider=%s, model=%s",
+        name,
+        provider,
+        model,
+    )
 
     # Ensure we have an agents directory
     agents_dir = ensure_agents_dir()
@@ -84,6 +98,7 @@ def create(
     agent_dir = agents_dir / agent_id
 
     if agent_dir.exists():
+        logger.error("Agent %s already exists", agent_id)
         click.echo(f"Error: Agent {agent_id} already exists")
         return
 
@@ -93,15 +108,17 @@ def create(
         model=model,
         settings=None,  # Use defaults
     )
+    logger.debug("Using provider config: %s", provider_config)
 
-    # Create the agent and save config
-    Agent.create(
+    # Create agent
+    agent = Agent.create(
         id=agent_id,
         system_prompt=system_prompt or DEFAULT_SYSTEM_PROMPT,
         provider_config=provider_config,
     )
 
-    click.echo(f"Created new agent: {agent_id}")
+    logger.info("Created new agent: %s", agent.id)
+    click.echo(f"Created new agent: {agent.id}")
     click.echo(f"Configuration saved to: {agent_dir}/config.json")
 
 
@@ -125,41 +142,49 @@ def async_command(f: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[..., A
 @async_command
 async def _run_chat_session(agent: Agent) -> None:
     """Run an interactive chat session with an agent."""
+    logger = logging.getLogger("agent_foundry")
+
     try:
         while True:
             # Get user input
             message = click.prompt("You", prompt_suffix=" > ")
             if message.lower() == "exit":
+                logger.debug("User requested exit")
                 break
 
             # Process message and get response
+            logger.debug("Processing message: %s", message)
             click.echo("\nAgent > ", nl=False)  # Start agent response line
             async for chunk in agent.chat(message):
                 click.echo(chunk.content, nl=False)
             click.echo("\n")  # Add newline after response
 
     except KeyboardInterrupt:
+        logger.info("Session ended by user (KeyboardInterrupt)")
         click.echo("\nSession ended by user")
     except Exception as e:
+        logger.exception("Error during chat session")
         click.echo(f"\nError: {e}")
     finally:
+        logger.info("Chat session ended")
         click.echo("\nSession ended")
 
 
 @cli.command()
 @click.argument("agent_id")
-@click.option("--debug", is_flag=True, help="Enable debug mode")
-def run(agent_id: str, debug: bool) -> None:
+def run(agent_id: str) -> None:
     """Run an interactive session with an agent."""
-    if debug:
-        click.echo("Debug mode enabled")
+    logger = logging.getLogger("agent_foundry")
+    logger.debug("Starting agent session: %s", agent_id)
 
     # Load the agent
     agent = load_agent(agent_id)
     if not agent:
+        logger.error("Agent %s not found", agent_id)
         click.echo(f"Error: Agent {agent_id} not found")
         return
 
+    logger.info("Starting session with agent: %s", agent_id)
     click.echo(f"Starting session with agent: {agent_id}")
     click.echo("Type 'exit' or press Ctrl+C to end the session")
     click.echo("Type your message and press Enter to send")
@@ -173,6 +198,9 @@ def run(agent_id: str, debug: bool) -> None:
 @click.option("--verbose", is_flag=True, help="Show detailed information")
 def list(verbose: bool) -> None:
     """List all available agents."""
+    logger = logging.getLogger("agent_foundry")
+    logger.debug("Listing agents (verbose=%s)", verbose)
+
     agents_dir = ensure_agents_dir()
 
     click.echo("Available agents:")
@@ -184,6 +212,7 @@ def list(verbose: bool) -> None:
                     config = json.load(f)
                 if verbose:
                     provider = config.get("provider", {})
+                    logger.debug("Agent details: %s", config)
                     click.echo(f"  {agent_dir.name}:")
                     click.echo(f"    Provider: {provider.get('name', 'openai')}")
                     click.echo(f"    Model: {provider.get('model', 'default')}")
@@ -197,20 +226,26 @@ def list(verbose: bool) -> None:
 @click.option("--force", is_flag=True, help="Skip confirmation")
 def delete(agent_id: str, force: bool) -> None:
     """Delete an agent."""
+    logger = logging.getLogger("agent_foundry")
+    logger.debug("Attempting to delete agent: %s (force=%s)", agent_id, force)
+
     agent_dir = Path(AGENTS_DIR) / agent_id
 
     if not agent_dir.exists():
+        logger.error("Agent %s not found", agent_id)
         click.echo(f"Error: Agent {agent_id} not found")
         return
 
     if not force and not click.confirm(
         f"Are you sure you want to delete agent {agent_id}?"
     ):
+        logger.info("User cancelled deletion of agent: %s", agent_id)
         return
 
     import shutil
 
     shutil.rmtree(agent_dir)
+    logger.info("Deleted agent: %s", agent_id)
     click.echo(f"Deleted agent: {agent_id}")
 
 
