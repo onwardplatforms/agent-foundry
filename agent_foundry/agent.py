@@ -37,6 +37,10 @@ class Agent:
         self.system_prompt = system_prompt
         self.logger = logging.getLogger("agent_foundry")
 
+        # Initialize chat history
+        self.chat_history = ChatHistory()
+        self.chat_history.add_system_message(system_prompt)
+
         # Load environment variables for this agent
         load_env_files(self.id)
 
@@ -150,10 +154,8 @@ class Agent:
         """
         self.logger.debug("Processing chat message: %s", message)
 
-        # Create chat history
-        history = ChatHistory()
-        history.add_system_message(self.system_prompt)
-        history.add_user_message(message)
+        # Add user message to history
+        self.chat_history.add_user_message(message)
 
         # Convert provider settings to prompt execution settings
         settings = self.provider_config.get_settings()
@@ -167,8 +169,12 @@ class Agent:
 
         # Get response using the service
         async for chunk in self.chat_service.get_streaming_chat_message_content(
-            chat_history=history,
+            chat_history=self.chat_history,
             settings=execution_settings,
         ):
             if chunk is not None:
                 yield chunk
+
+        # Add assistant's response to history after it's complete
+        if chunk is not None:
+            self.chat_history.add_assistant_message(chunk.content)
