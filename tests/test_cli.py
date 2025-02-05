@@ -37,10 +37,10 @@ def test_version(runner):
     assert __version__ in result.output
 
 
-def test_create_with_random_id(runner: CliRunner, tmp_path: Path) -> None:
-    """Test that create command works with a random ID."""
+def test_add_with_random_id(runner: CliRunner, tmp_path: Path) -> None:
+    """Test that add command works with a random ID."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
-        result = runner.invoke(cli, ["create"])
+        result = runner.invoke(cli, ["agents", "add"])
         assert result.exit_code == 0
         assert "Created new agent:" in result.output
         assert "config.json" in result.output
@@ -55,10 +55,10 @@ def test_create_with_random_id(runner: CliRunner, tmp_path: Path) -> None:
             assert config["system_prompt"] == DEFAULT_SYSTEM_PROMPT
 
 
-def test_create_with_specific_name(runner: CliRunner, tmp_path: Path) -> None:
-    """Test that create command works with a specific name."""
+def test_add_with_specific_name(runner: CliRunner, tmp_path: Path) -> None:
+    """Test that add command works with a specific name."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
-        result = runner.invoke(cli, ["create", "test-agent"])
+        result = runner.invoke(cli, ["agents", "add", "test-agent"])
         assert result.exit_code == 0
         assert "Created new agent: test-agent" in result.output
 
@@ -66,11 +66,11 @@ def test_create_with_specific_name(runner: CliRunner, tmp_path: Path) -> None:
         assert config_path.exists()
 
 
-def test_create_with_custom_system_prompt(runner: CliRunner, tmp_path: Path) -> None:
-    """Test that create command works with a custom system prompt."""
+def test_add_with_custom_system_prompt(runner: CliRunner, tmp_path: Path) -> None:
+    """Test that add command works with a custom system prompt."""
     custom_prompt = "You are a test assistant."
     with runner.isolated_filesystem(temp_dir=tmp_path):
-        result = runner.invoke(cli, ["create", "--system-prompt", custom_prompt])
+        result = runner.invoke(cli, ["agents", "add", "--system-prompt", custom_prompt])
         assert result.exit_code == 0
 
         agents_dir = Path(AGENTS_DIR)
@@ -82,10 +82,10 @@ def test_create_with_custom_system_prompt(runner: CliRunner, tmp_path: Path) -> 
             assert config["system_prompt"] == custom_prompt
 
 
-def test_create_with_debug_flag(runner: CliRunner, tmp_path: Path) -> None:
-    """Test that create command works with debug flag."""
+def test_add_with_debug_flag(runner: CliRunner, tmp_path: Path) -> None:
+    """Test that add command works with debug flag."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
-        result = runner.invoke(cli, ["--debug", "create"])
+        result = runner.invoke(cli, ["--debug", "agents", "add"])
         assert result.exit_code == 0
         assert "Debug mode enabled" in result.output
         assert "Created new agent:" in result.output
@@ -95,7 +95,7 @@ def test_run_command(runner: CliRunner, tmp_path: Path) -> None:
     """Test that run command works."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
         # Create an agent first
-        result = runner.invoke(cli, ["create", "test-agent"])
+        result = runner.invoke(cli, ["agents", "add", "test-agent"])
         assert result.exit_code == 0
 
         # Mock the chat method to avoid actual API calls
@@ -104,7 +104,7 @@ def test_run_command(runner: CliRunner, tmp_path: Path) -> None:
 
         with patch("agent_foundry.agent.Agent.chat", mock_async_chat):
             # Test running the agent
-            result = runner.invoke(cli, ["run", "test-agent"], input="exit\n")
+            result = runner.invoke(cli, ["agents", "run", "test-agent"], input="exit\n")
             assert result.exit_code == 0
             assert "Starting session with agent: test-agent" in result.output
 
@@ -113,11 +113,11 @@ def test_list_command_verbose(runner: CliRunner, tmp_path: Path) -> None:
     """Test that list command works with verbose flag."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
         # Create an agent first
-        result = runner.invoke(cli, ["create", "test-agent"])
+        result = runner.invoke(cli, ["agents", "add", "test-agent"])
         assert result.exit_code == 0  # Ensure creation succeeded
 
         # Test verbose listing
-        result = runner.invoke(cli, ["list", "--verbose"])
+        result = runner.invoke(cli, ["agents", "list", "--verbose"])
         assert result.exit_code == 0
         assert "Available agents:" in result.output
         assert "test-agent:" in result.output
@@ -129,23 +129,23 @@ def test_list_command(runner: CliRunner, tmp_path: Path) -> None:
     """Test that list command works."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
         # Create an agent first
-        result = runner.invoke(cli, ["create", "test-agent"])
+        result = runner.invoke(cli, ["agents", "add", "test-agent"])
         assert result.exit_code == 0  # Ensure creation succeeded
 
-        result = runner.invoke(cli, ["list"])
+        result = runner.invoke(cli, ["agents", "list"])
         assert result.exit_code == 0
         assert "Available agents:" in result.output
         assert "test-agent" in result.output
 
 
-def test_delete_command_with_confirmation(runner: CliRunner, tmp_path: Path) -> None:
-    """Test that delete command works with confirmation."""
+def test_remove_command_with_confirmation(runner: CliRunner, tmp_path: Path) -> None:
+    """Test that remove command works with confirmation."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
         # Create an agent first
-        result = runner.invoke(cli, ["create", "test-agent"])
+        result = runner.invoke(cli, ["agents", "add", "test-agent"])
         assert result.exit_code == 0  # Ensure creation succeeded
 
-        result = runner.invoke(cli, ["delete", "test-agent"], input="y\n")
+        result = runner.invoke(cli, ["agents", "remove", "test-agent"], input="y\n")
         assert result.exit_code == 0
         assert "Deleted agent: test-agent" in result.output
 
@@ -154,14 +154,14 @@ def test_delete_command_with_confirmation(runner: CliRunner, tmp_path: Path) -> 
         assert not agent_dir.exists()
 
 
-def test_delete_command_abort(runner: CliRunner, tmp_path: Path) -> None:
-    """Test that delete command can be aborted."""
+def test_remove_command_abort(runner: CliRunner, tmp_path: Path) -> None:
+    """Test that remove command can be aborted."""
     with runner.isolated_filesystem(temp_dir=tmp_path):
         # Create an agent first
-        result = runner.invoke(cli, ["create", "test-agent"])
+        result = runner.invoke(cli, ["agents", "add", "test-agent"])
         assert result.exit_code == 0  # Ensure creation succeeded
 
-        result = runner.invoke(cli, ["delete", "test-agent"], input="n\n")
+        result = runner.invoke(cli, ["agents", "remove", "test-agent"], input="n\n")
         assert result.exit_code == 0
         assert "Deleted agent: test-agent" not in result.output
 

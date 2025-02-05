@@ -23,7 +23,7 @@ Homepage = "https://github.com/justinoconnor/agent-foundry"
 Repository = "https://github.com/justinoconnor/agent-foundry"
 
 [project.scripts]
-foundry = "agent_foundry.cli.cli:cli"
+odk = "agent_foundry.cli.cli:cli"
 
 [tool.black]
 line-length = 88

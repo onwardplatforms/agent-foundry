@@ -22,8 +22,8 @@ cd agent-foundry
 make install-dev
 
 # Create and run your first agent
-foundry create my-agent
-foundry run my-agent
+odk agents add my-agent
+odk agents run my-agent
 ```
 
 ## Installation
@@ -98,60 +98,29 @@ OPENAI_API_KEY=agent-specific-key  # Use different API key for this agent
 
 ## Usage
 
-### Creating an Agent
+### Managing Agents
 
-Create a new agent with an optional name, provider, and system prompt:
-
-```bash
-# Create with OpenAI (default)
-foundry create my-agent --provider openai --model gpt-4
-
-# Create with Ollama
-foundry create llama-agent --provider ollama --model llama2
-
-# Create with custom system prompt
-foundry create my-agent --system-prompt "You are a helpful coding assistant."
-
-# Create with debug mode
-foundry create my-agent --debug
-```
-
-### Running an Agent
-
-Start an interactive chat session with an agent:
+The CLI provides several commands for managing agents:
 
 ```bash
-# Basic run
-foundry run my-agent
+# List all agents
+odk agents list
 
-# Run with debug mode
-foundry run my-agent --debug
-```
+# List agents with detailed information
+odk agents list --verbose
 
-The agent will respond in real-time with streaming output.
+# Add a new agent
+odk agents add my-agent --provider openai --model gpt-4
+odk agents add llama-agent --provider ollama --model llama2
+odk agents add custom-agent --system-prompt "You are a helpful coding assistant."
 
-### Listing Agents
+# Run an agent
+odk agents run my-agent
+odk agents run my-agent --debug
 
-List all available agents:
-
-```bash
-# Basic list
-foundry list
-
-# Detailed list with configurations
-foundry list --verbose
-```
-
-### Deleting an Agent
-
-Delete an agent:
-
-```bash
-# With confirmation prompt
-foundry delete my-agent
-
-# Force delete without confirmation
-foundry delete my-agent --force
+# Remove an agent
+odk agents remove my-agent
+odk agents remove my-agent --force  # Skip confirmation
 ```
 
 ## Project Structure

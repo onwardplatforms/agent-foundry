@@ -25,7 +25,7 @@ setup(
     include_package_data=True,
     entry_points={
         "console_scripts": [
-            "foundry=agent_foundry.cli.cli:cli",
+            "odk=agent_foundry.cli.cli:cli",
         ],
     },
 )

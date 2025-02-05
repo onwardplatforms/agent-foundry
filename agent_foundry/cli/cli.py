@@ -57,7 +57,13 @@ def cli(debug: bool) -> None:
     set_debug_logging(debug)
 
 
-@cli.command()
+@cli.group()
+def agents() -> None:
+    """Manage AI agents."""
+    pass
+
+
+@agents.command()
 @click.argument("name", required=False)
 @click.option(
     "--system-prompt",
@@ -70,13 +76,13 @@ def cli(debug: bool) -> None:
     help="Provider to use (default: openai)",
 )
 @click.option("--model", help="Model to use (provider-specific)")
-def create(
+def add(
     name: Optional[str],
     system_prompt: Optional[str],
     provider: str,
     model: Optional[str],
 ) -> None:
-    """Create a new agent.
+    """Add a new agent.
 
     If no name is provided, generates a random ID.
     If no system prompt is provided, uses the default:
@@ -170,7 +176,7 @@ async def _run_chat_session(agent: Agent) -> None:
         click.echo("\nSession ended")
 
 
-@cli.command()
+@agents.command()
 @click.argument("agent_id")
 def run(agent_id: str) -> None:
     """Run an interactive session with an agent."""
@@ -194,7 +200,7 @@ def run(agent_id: str) -> None:
     _run_chat_session(agent)
 
 
-@cli.command()
+@agents.command()
 @click.option("--verbose", is_flag=True, help="Show detailed information")
 def list(verbose: bool) -> None:
     """List all available agents."""
@@ -221,11 +227,11 @@ def list(verbose: bool) -> None:
                     click.echo(f"  {agent_dir.name}")
 
 
-@cli.command()
+@agents.command()
 @click.argument("agent_id")
 @click.option("--force", is_flag=True, help="Skip confirmation")
-def delete(agent_id: str, force: bool) -> None:
-    """Delete an agent."""
+def remove(agent_id: str, force: bool) -> None:
+    """Remove an agent."""
     logger = logging.getLogger("agent_foundry")
     logger.debug("Attempting to delete agent: %s (force=%s)", agent_id, force)
 
