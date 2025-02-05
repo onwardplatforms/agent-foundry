@@ -149,3 +149,89 @@ async def test_agent_chat(mock_config: ProviderConfig) -> None:
 
             # Verify the service was called correctly
             assert mock_service.get_streaming_chat_message_content.called
+
+
+@pytest.mark.asyncio
+async def test_chat_history_initialization(mock_config: ProviderConfig) -> None:
+    """Test that chat history is initialized with system prompt."""
+    with patch("agent_foundry.agent.load_env_files"):
+        with patch("agent_foundry.agent.OpenAIChatCompletion") as mock_service_class:
+            # Create a properly typed mock service
+            mock_service = create_autospec(OpenAIChatCompletion)
+            mock_service.service_id = "openai-chat"
+            mock_service_class.return_value = mock_service
+
+            agent = Agent("test-agent", "Test system prompt", mock_config)
+
+            # Verify chat history is initialized with system prompt
+            assert len(agent.chat_history.messages) == 1
+            assert agent.chat_history.messages[0].role == AuthorRole.SYSTEM
+            assert agent.chat_history.messages[0].content == "Test system prompt"
+
+
+@pytest.mark.asyncio
+async def test_chat_history_persistence(mock_config: ProviderConfig) -> None:
+    """Test that chat history persists between messages."""
+    with patch("agent_foundry.agent.load_env_files"):
+        with patch("agent_foundry.agent.OpenAIChatCompletion") as mock_service_class:
+            # Create a properly typed mock service
+            mock_service = create_autospec(OpenAIChatCompletion)
+            mock_service.service_id = "openai-chat"
+            mock_service_class.return_value = mock_service
+
+            # Set up mock responses
+            responses = [
+                StreamingChatMessageContent(
+                    role=AuthorRole.ASSISTANT,
+                    content="First response",
+                    choice_index=0,
+                ),
+                StreamingChatMessageContent(
+                    role=AuthorRole.ASSISTANT,
+                    content="Second response",
+                    choice_index=0,
+                ),
+            ]
+
+            response_index = 0
+
+            async def mock_stream():
+                nonlocal response_index
+                yield responses[response_index]
+                response_index += 1
+
+            mock_service.get_streaming_chat_message_content.side_effect = [
+                mock_stream(),
+                mock_stream(),
+            ]
+
+            # Create agent and test chat
+            agent = Agent("test-agent", "Test system prompt", mock_config)
+
+            # First message
+            response1 = [chunk async for chunk in agent.chat("First message")]
+            assert len(response1) == 1
+            assert response1[0].content == "First response"
+
+            # Verify chat history after first message
+            assert len(agent.chat_history.messages) == 3  # system + user + assistant
+            assert agent.chat_history.messages[0].role == AuthorRole.SYSTEM
+            assert agent.chat_history.messages[0].content == "Test system prompt"
+            assert agent.chat_history.messages[1].role == AuthorRole.USER
+            assert agent.chat_history.messages[1].content == "First message"
+            assert agent.chat_history.messages[2].role == AuthorRole.ASSISTANT
+            assert agent.chat_history.messages[2].content == "First response"
+
+            # Second message
+            response2 = [chunk async for chunk in agent.chat("Second message")]
+            assert len(response2) == 1
+            assert response2[0].content == "Second response"
+
+            # Verify chat history after second message
+            assert (
+                len(agent.chat_history.messages) == 5
+            )  # system + user1 + assistant1 + user2 + assistant2
+            assert agent.chat_history.messages[3].role == AuthorRole.USER
+            assert agent.chat_history.messages[3].content == "Second message"
+            assert agent.chat_history.messages[4].role == AuthorRole.ASSISTANT
+            assert agent.chat_history.messages[4].content == "Second response"
