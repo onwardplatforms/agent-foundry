@@ -12,8 +12,9 @@
     },
     "plugins": [
         {
-            "name": "test_plugin",
-            "source": "plugins/test_plugin",
+            "name": "github_test_plugin",
+            "source": "https://github.com/jsoconno/sk-test-plugin",
+            "version": "main",
             "variables": {}
         }
     ]

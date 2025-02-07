@@ -4,6 +4,7 @@ import importlib
 import os
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -47,10 +48,7 @@ class PluginConfig:
         if not self.source:
             return False
         parsed = urlparse(self.source)
-        return (
-            parsed.netloc == "github.com"
-            or parsed.netloc == "raw.githubusercontent.com"
-        )
+        return parsed.netloc == "github.com"
 
     @property
     def is_local_source(self) -> bool:
@@ -93,6 +91,43 @@ class PluginManager:
             env_key = f"AGENT_VAR_{key.upper()}"
             os.environ[env_key] = value
 
+    def _clone_github_plugin(self, plugin_config: PluginConfig) -> Path:
+        """Clone a plugin from GitHub.
+
+        Args:
+            plugin_config: Plugin configuration
+
+        Returns:
+            Path to the cloned repository
+
+        Raises:
+            subprocess.CalledProcessError: If git clone fails
+            ValueError: If version is not specified for GitHub plugin
+        """
+        if not plugin_config.version:
+            raise ValueError("Version must be specified for GitHub plugins")
+
+        # Create versioned directory for the plugin: plugins/name/version
+        plugin_dir = self.plugins_dir / plugin_config.name / plugin_config.version
+        if plugin_dir.exists():
+            shutil.rmtree(plugin_dir)
+        plugin_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        # Clone the repository
+        subprocess.run(
+            ["git", "clone", plugin_config.source, str(plugin_dir)],
+            check=True,
+        )
+
+        # Checkout specific version
+        subprocess.run(
+            ["git", "checkout", plugin_config.version],
+            cwd=plugin_dir,
+            check=True,
+        )
+
+        return plugin_dir
+
     def install_plugin(
         self, plugin_config: PluginConfig, base_dir: Optional[Path] = None
     ) -> None:
@@ -104,16 +139,28 @@ class PluginManager:
 
         Raises:
             FileNotFoundError: If plugin source doesn't exist
+            subprocess.CalledProcessError: If git operations fail
+            ValueError: If version is not specified for GitHub plugin
         """
-        # Resolve source path relative to base_dir if provided
-        source_path = (
-            Path(plugin_config.source)
-            if base_dir is None
-            else base_dir / plugin_config.source
-        ).resolve()
+        if plugin_config.is_github_source:
+            plugin_dir = self._clone_github_plugin(plugin_config)
+            # Add versioned plugin directory to Python path
+            if str(plugin_dir) not in sys.path:
+                sys.path.append(str(plugin_dir))
+        else:
+            # Handle local source - can be anywhere, just resolve the path
+            source_path = (
+                Path(plugin_config.source)
+                if base_dir is None
+                else base_dir / plugin_config.source
+            ).resolve()
 
-        if not source_path.exists():
-            raise FileNotFoundError(f"Plugin source path not found: {source_path}")
+            if not source_path.exists():
+                raise FileNotFoundError(f"Plugin source path not found: {source_path}")
+
+            # Add local plugin directory to Python path
+            if str(source_path) not in sys.path:
+                sys.path.append(str(source_path))
 
         # Set plugin variables
         self._set_plugin_variables(plugin_config)

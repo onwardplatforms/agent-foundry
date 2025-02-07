@@ -1,4 +1,4 @@
-"""Test plugin package."""
+"""Local test plugin package."""
 
 from semantic_kernel.functions import kernel_function
 
@@ -16,7 +16,7 @@ class TestPlugin:
         Returns:
             A greeting message
         """
-        return f"Hello, {name}! Nice to meet you!"
+        return f"Hello, {name}! Nice to meet you! (from local plugin)"
 
     @kernel_function(description="Echo back the input", name="echo")
     def echo(self, input: str) -> str:
@@ -28,4 +28,4 @@ class TestPlugin:
         Returns:
             The same text that was input
         """
-        return input
+        return f"{input} (from local plugin)"
