@@ -1,0 +1,20 @@
+{
+    "name": "test-agent",
+    "description": "A test agent using Ollama provider",
+    "system_prompt": "You are a helpful AI assistant.",
+    "model": {
+        "provider": "ollama",
+        "name": "llama2",
+        "settings": {
+            "temperature": 0.7,
+            "max_tokens": 1000
+        }
+    },
+    "plugins": [
+        {
+            "name": "test_plugin",
+            "source": "plugins/test_plugin",
+            "variables": {}
+        }
+    ]
+}

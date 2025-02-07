@@ -1,10 +1,14 @@
 """Ollama provider implementation."""
 
 import json
-from typing import AsyncIterator
+import logging
+import subprocess
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 import aiohttp
 import requests
+from pydantic import BaseModel, Field
 from requests.exceptions import RequestException
 from semantic_kernel.contents import (
     AuthorRole,
@@ -12,8 +16,8 @@ from semantic_kernel.contents import (
     StreamingChatMessageContent,
 )
 
-from agent_foundry.env import get_env_var
-from agent_foundry.providers.base import OllamaSettings, Provider, ProviderConfig
+from agent_runtime.env import get_env_var
+from agent_runtime.providers.base import OllamaSettings, Provider, ProviderConfig
 
 
 class OllamaProvider(Provider):

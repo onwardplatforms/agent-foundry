@@ -1,15 +1,17 @@
 """OpenAI provider implementation."""
 
-from typing import AsyncIterator
+import logging
+from typing import Any, AsyncIterator, Dict, Optional
 
+from pydantic import BaseModel, Field
 from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
 from semantic_kernel.connectors.ai.prompt_execution_settings import (
     PromptExecutionSettings,
 )
 from semantic_kernel.contents import ChatHistory, StreamingChatMessageContent
 
-from agent_foundry.env import get_env_var
-from agent_foundry.providers.base import OpenAISettings, Provider, ProviderConfig
+from agent_runtime.env import get_env_var
+from agent_runtime.providers.base import OpenAISettings, Provider, ProviderConfig
 
 
 class OpenAIProvider(Provider):

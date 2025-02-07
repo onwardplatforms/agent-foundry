@@ -1,10 +1,10 @@
-"""Provider registry for Agent Foundry."""
+"""Provider registry for managing available providers."""
 
-from typing import Optional
+from typing import Dict, Optional, Type
 
-from agent_foundry.providers.base import Provider, ProviderConfig, ProviderType
-from agent_foundry.providers.ollama import OllamaProvider
-from agent_foundry.providers.openai import OpenAIProvider
+from agent_runtime.providers.base import Provider, ProviderConfig, ProviderType
+from agent_runtime.providers.ollama import OllamaProvider
+from agent_runtime.providers.openai import OpenAIProvider
 
 
 def get_provider(config: ProviderConfig) -> Provider:

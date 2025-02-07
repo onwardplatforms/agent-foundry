@@ -1,3 +1,5 @@
 click
 semantic-kernel
 python-dotenv
+aiohttp
+jsonschema

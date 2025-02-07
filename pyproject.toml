@@ -5,18 +5,25 @@ build-backend = "hatchling.build"
 [project]
 name = "agent_foundry"
 version = "0.1.0"
-description = "A tool for creating and managing AI agents"
 authors = [
-    { name = "Justin O'Connor", email = "justin@onwardplatforms.com" },
+    { name="Justin O'Connor", email="justin@example.com" },
 ]
+description = "A framework for building and managing AI agents"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
 dependencies = [
     "click",
     "semantic-kernel",
     "python-dotenv",
+    "aiohttp",
+    "jsonschema"
 ]
-requires-python = ">=3.11"
-readme = "README.md"
-license = { text = "MIT" }
 
 [project.urls]
 Homepage = "https://github.com/justinoconnor/agent-foundry"
@@ -73,3 +80,6 @@ dev-dependencies = [
 
 [tool.hatch.metadata]
 allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent_runtime"]
