@@ -23,7 +23,6 @@ def valid_config() -> Dict[str, Any]:
         },
         "plugins": [
             {
-                "name": "search",
                 "source": "github.com/example/search-plugin",
                 "version": "v1.0.0",
                 "variables": {"api_key": "$SEARCH_API_KEY"},
@@ -81,19 +80,19 @@ def test_validate_invalid_model_settings(valid_config: Dict[str, Any]) -> None:
 
 def test_validate_invalid_plugin_config(valid_config: Dict[str, Any]) -> None:
     """Test validation fails with invalid plugin configuration."""
-    # Add plugin without required fields
+    # Add plugin without required source field
     valid_config["plugins"].append(
         {
-            "name": "invalid-plugin"
-            # Missing source and version
+            "variables": {},  # Missing source field
+            "version": "main",  # Version without source is invalid
         }
     )
 
     is_valid, errors = validate_agent_config(valid_config)
     assert not is_valid
-    assert len(errors) == 2  # Missing both source and version
-    assert any("source" in error for error in errors)
-    assert any("version" in error for error in errors)
+    assert len(errors) == 2  # Both missing source and invalid version
+    assert any("source" in error for error in errors)  # Missing source error
+    assert any("version" in error for error in errors)  # Invalid version error
 
 
 def test_validate_nonexistent_file() -> None:
@@ -101,7 +100,7 @@ def test_validate_nonexistent_file() -> None:
     is_valid, errors = validate_agent_config(Path("nonexistent.json"))
     assert not is_valid
     assert len(errors) == 1
-    assert "File not found" in errors[0]
+    assert "Config file not found" in errors[0]
 
 
 def test_validate_invalid_json_file(tmp_path: Path) -> None:
@@ -120,14 +119,19 @@ def test_validate_plugin_variables(valid_config: Dict[str, Any]) -> None:
     """Test validation of plugin variables."""
     # Test valid environment variable reference
     plugin = valid_config["plugins"][0]
-    plugin["variables"]["api_key"] = "$VALID_ENV_VAR"
+    plugin["variables"] = {"api_key": "$VALID_ENV_VAR"}
     is_valid, errors = validate_agent_config(valid_config)
     assert is_valid
     assert not errors
 
-    # Test invalid environment variable reference
-    plugin["variables"]["api_key"] = "INVALID_ENV_VAR"  # Missing $
+    # Test invalid variable name
+    plugin["variables"] = {"invalid-name": "$VALID_ENV_VAR"}
     is_valid, errors = validate_agent_config(valid_config)
     assert not is_valid
-    assert len(errors) == 1
-    assert "environment variable" in errors[0]
+    assert any("invalid-name" in error for error in errors)
+
+    # Test invalid variable value
+    plugin["variables"] = {"valid_name": "invalid_value"}
+    is_valid, errors = validate_agent_config(valid_config)
+    assert not is_valid
+    assert any("invalid_value" in error for error in errors)

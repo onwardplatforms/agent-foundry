@@ -1,5 +1,6 @@
 """Local test plugin package."""
 
+import os
 from semantic_kernel.functions import kernel_function
 
 
@@ -29,3 +30,18 @@ class TestPlugin:
             The same text that was input
         """
         return f"{input} (from local plugin)"
+
+    @kernel_function(
+        description="Sign a message with the configured signature", name="sign"
+    )
+    def sign(self, message: str) -> str:
+        """Sign a message with the configured signature.
+
+        Args:
+            message: The message to sign
+
+        Returns:
+            The signed message
+        """
+        signature = os.getenv("AGENT_VAR_SIGNATURE", "Anonymous")
+        return f"{message}\n\nBest regards,\n{signature}"

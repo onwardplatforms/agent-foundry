@@ -76,22 +76,19 @@ def validate_plugin_variables(
     errors = []
 
     for key, value in variables.items():
-        # Check for environment variable references
-        if value.startswith("$"):
-            env_var = value[1:]  # Remove $
-            if env_vars is not None:
-                # Use provided env vars for testing
-                if env_var not in env_vars:
-                    errors.append(f"Environment variable not found: {env_var}")
-            else:
-                # In real usage, we don't validate env var existence
-                # as they might be set later or in different environments
-                pass
-
         # Validate key format
         if not key.isidentifier():
             errors.append(
                 f"Invalid variable name '{key}': must be a valid Python identifier"
             )
+
+        # Check for environment variable references
+        if not value.startswith("$"):
+            errors.append(f"Invalid variable value '{value}': must start with $")
+        elif env_vars is not None:
+            # Use provided env vars for testing
+            env_var = value[1:]  # Remove $
+            if env_var not in env_vars:
+                errors.append(f"Environment variable not found: {env_var}")
 
     return len(errors) == 0, errors

@@ -24,7 +24,6 @@ class PluginConfig:
 
     def __init__(
         self,
-        name: str,
         source: str,
         version: Optional[str] = None,
         variables: Optional[Dict[str, str]] = None,
@@ -32,30 +31,45 @@ class PluginConfig:
         """Initialize plugin configuration.
 
         Args:
-            name: Name to use for the plugin when loaded
             source: GitHub repository URL or local path to the plugin
             version: Optional version (git tag/commit) to use, required for GitHub sources
             variables: Optional plugin-specific configuration variables
 
         Raises:
-            ValueError: If version is not provided for GitHub sources
+            ValueError: If version is not provided for GitHub sources or if version is provided for local sources
         """
-        self.name = name
         self.source = source
         self.variables = variables or {}
 
         # Validate version requirement for GitHub sources
         if self.is_github_source and not version:
             raise ValueError("Version must be specified for GitHub plugins")
+        if not self.is_github_source and version:
+            raise ValueError("Version cannot be specified for local plugins")
         self.version = version
+
+    @property
+    def name(self) -> str:
+        """Get the plugin name derived from the source path."""
+        if self.is_github_source:
+            # Extract repo name from GitHub URL and sanitize
+            parts = self.source.split("/")
+            raw_name = parts[-1]
+        else:
+            # Use last part of local path and sanitize
+            raw_name = Path(self.source).name
+
+        # Replace hyphens with underscores and remove any other invalid characters
+        return re.sub(r"[^0-9A-Za-z_]", "_", raw_name)
 
     @property
     def is_github_source(self) -> bool:
         """Check if the source is a GitHub URL."""
         if not self.source:
             return False
-        parsed = urlparse(self.source)
-        return parsed.netloc == "github.com"
+        return self.source.startswith("https://github.com/") or self.source.startswith(
+            "github.com/"
+        )
 
     @property
     def is_local_source(self) -> bool:
@@ -120,8 +134,14 @@ class PluginManager:
 
         # Clone into a temporary directory
         temp_dir = plugin_base / "temp"
+        # Handle URLs that already include https://
+        clone_url = (
+            plugin_config.source
+            if plugin_config.source.startswith("https://")
+            else f"https://{plugin_config.source}"
+        )
         subprocess.run(
-            ["git", "clone", plugin_config.source, str(temp_dir)],
+            ["git", "clone", clone_url, str(temp_dir)],
             check=True,
         )
 
@@ -134,6 +154,8 @@ class PluginManager:
 
         # Create the versioned directory and move files
         version_dir = plugin_base / plugin_config.version
+        if version_dir.exists():
+            shutil.rmtree(version_dir)
         version_dir.mkdir(exist_ok=True)
 
         # Move all files from temp directory to version directory
@@ -181,9 +203,22 @@ class PluginManager:
             if not source_path.exists():
                 raise FileNotFoundError(f"Plugin source path not found: {source_path}")
 
-            # Add local plugin directory to Python path
-            if str(source_path) not in sys.path:
-                sys.path.append(str(source_path))
+            # Create plugin directory and copy files
+            plugin_dir = self.plugins_dir / plugin_config.name
+            if plugin_dir.exists():
+                shutil.rmtree(plugin_dir)
+            plugin_dir.mkdir(parents=True, exist_ok=True)
+
+            # Copy all files from source to plugin directory
+            for item in source_path.iterdir():
+                if item.is_dir():
+                    shutil.copytree(item, plugin_dir / item.name, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, plugin_dir / item.name)
+
+            # Add plugin directory to Python path
+            if str(plugin_dir) not in sys.path:
+                sys.path.append(str(plugin_dir))
 
         # Set plugin variables
         self._set_plugin_variables(plugin_config)
@@ -206,13 +241,26 @@ class PluginManager:
             # For GitHub plugins, import from versioned directory
             if version:
                 module_path = f"{name}.{version}"
+                module = importlib.import_module(module_path)
             else:
-                module_path = name
+                # For local plugins, try importing plugin.py directly
+                plugin_dir = self.plugins_dir / name
+                if not plugin_dir.exists():
+                    raise PluginNotFoundError(
+                        f"Plugin directory not found: {plugin_dir}"
+                    )
 
-            # Import the plugin module
-            module = importlib.import_module(module_path)
+                # Try plugin.py first, then __init__.py
+                if (plugin_dir / "plugin.py").exists():
+                    module = importlib.import_module("plugin")
+                elif (plugin_dir / "__init__.py").exists():
+                    module = importlib.import_module(name)
+                else:
+                    raise PluginNotFoundError(
+                        f"Neither plugin.py nor __init__.py found in {plugin_dir}"
+                    )
 
-            # Look for a class that matches the plugin name or is named TestPlugin
+            # Look for a class that matches the plugin name or is named Plugin/TestPlugin/ExamplePlugin
             plugin_class = None
             for attr_name in dir(module):
                 attr = getattr(module, attr_name)
@@ -220,7 +268,9 @@ class PluginManager:
                     isinstance(attr, type)
                     and attr.__module__ == module.__name__
                     and (
-                        attr.__name__ == "TestPlugin"
+                        attr.__name__ == "Plugin"
+                        or attr.__name__ == "TestPlugin"
+                        or attr.__name__ == "ExamplePlugin"
                         or attr.__name__.lower() == name.lower()
                     )
                 ):
@@ -229,7 +279,7 @@ class PluginManager:
 
             if plugin_class is None:
                 raise PluginNotFoundError(
-                    f"No plugin class found in module: {module_path}"
+                    f"No plugin class found in module: {module.__name__}"
                 )
 
             # Create an instance and register it with the kernel
@@ -238,8 +288,8 @@ class PluginManager:
 
         except ImportError as e:
             raise PluginNotFoundError(
-                f"Failed to import plugin {module_path}: {str(e)}"
-            )
+                f"Failed to import plugin {name}: {str(e)}"
+            ) from e
 
     def install_and_load_plugins(
         self, plugin_configs: List[PluginConfig], base_dir: Optional[Path] = None

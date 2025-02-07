@@ -28,6 +28,7 @@ class Agent:
         description: str,
         system_prompt: str,
         model_config: Dict[str, Any],
+        kernel: Optional[Kernel] = None,
         plugins_dir: Optional[Path] = None,
     ):
         """Initialize the agent.
@@ -37,6 +38,7 @@ class Agent:
             description: Agent description
             system_prompt: System prompt for the agent
             model_config: Model configuration dictionary
+            kernel: Optional pre-configured kernel with plugins
             plugins_dir: Optional directory containing plugins
         """
         self.name = name
@@ -48,8 +50,8 @@ class Agent:
         self.chat_history = ChatHistory()
         self.chat_history.add_system_message(system_prompt)
 
-        # Initialize kernel and chat completion service based on provider
-        self.kernel = Kernel()
+        # Initialize or use provided kernel
+        self.kernel = kernel or Kernel()
         self.chat_service = self._setup_chat_service(model_config)
         self.kernel.add_service(self.chat_service)
 
@@ -89,40 +91,42 @@ class Agent:
             raise ValueError(f"Unsupported model provider: {provider}")
 
     @classmethod
-    def from_config(cls, config: Dict[str, Any], base_dir: Path) -> "Agent":
+    def from_config(
+        cls, config: Dict[str, Any], base_dir: Optional[Path] = None
+    ) -> "Agent":
         """Create an agent from a configuration dictionary.
 
         Args:
-            config: Agent configuration dictionary
-            base_dir: Base directory for resolving plugin paths
+            config: Configuration dictionary
+            base_dir: Optional base directory for resolving relative paths
 
         Returns:
-            Configured agent instance
+            The created agent instance
         """
-        # Create agent with basic config
-        agent = cls(
+        # Create kernel and plugin manager
+        kernel = Kernel()
+        plugin_manager = PluginManager(kernel, base_dir or Path.cwd())
+
+        # Create and load plugins
+        plugin_configs = [
+            PluginConfig(
+                source=p["source"],
+                version=p.get("version"),
+                variables=p.get("variables", {}),
+            )
+            for p in config.get("plugins", [])
+        ]
+        plugin_manager.install_and_load_plugins(plugin_configs, base_dir=base_dir)
+
+        # Create agent instance with the configured kernel
+        return cls(
             name=config["name"],
             description=config["description"],
             system_prompt=config["system_prompt"],
             model_config=config["model"],
-            plugins_dir=base_dir / ".plugins",
+            kernel=kernel,  # Pass the configured kernel
+            plugins_dir=base_dir,
         )
-
-        # Set up plugins if any are configured
-        if config.get("plugins"):
-            plugin_manager = PluginManager(agent.kernel, base_dir)
-            plugin_configs = [
-                PluginConfig(
-                    name=p["name"],
-                    source=p["source"],
-                    version=p.get("version"),
-                    variables=p.get("variables"),
-                )
-                for p in config["plugins"]
-            ]
-            plugin_manager.install_and_load_plugins(plugin_configs, base_dir=base_dir)
-
-        return agent
 
     async def chat(self, message: str) -> AsyncIterator[StreamingChatMessageContent]:
         """Process a chat message and return the response.
