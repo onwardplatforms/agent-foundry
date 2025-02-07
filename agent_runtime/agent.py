@@ -100,18 +100,17 @@ class Agent:
             Configured agent instance
         """
         # Create agent with basic config
-        plugins_dir = base_dir / "plugins"
         agent = cls(
             name=config["name"],
             description=config["description"],
             system_prompt=config["system_prompt"],
             model_config=config["model"],
-            plugins_dir=plugins_dir,
+            plugins_dir=base_dir / ".plugins",
         )
 
         # Set up plugins if any are configured
         if config.get("plugins"):
-            plugin_manager = PluginManager(agent.kernel, plugins_dir)
+            plugin_manager = PluginManager(agent.kernel, base_dir)
             plugin_configs = [
                 PluginConfig(
                     name=p["name"],

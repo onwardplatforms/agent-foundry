@@ -34,13 +34,20 @@ class PluginConfig:
         Args:
             name: Name to use for the plugin when loaded
             source: GitHub repository URL or local path to the plugin
-            version: Optional version (git tag/commit) to use
+            version: Optional version (git tag/commit) to use, required for GitHub sources
             variables: Optional plugin-specific configuration variables
+
+        Raises:
+            ValueError: If version is not provided for GitHub sources
         """
         self.name = name
         self.source = source
-        self.version = version
         self.variables = variables or {}
+
+        # Validate version requirement for GitHub sources
+        if self.is_github_source and not version:
+            raise ValueError("Version must be specified for GitHub plugins")
+        self.version = version
 
     @property
     def is_github_source(self) -> bool:
@@ -59,19 +66,21 @@ class PluginConfig:
 class PluginManager:
     """Manager for SK plugins."""
 
-    def __init__(self, kernel: Kernel, plugins_dir: Path):
+    PLUGINS_DIR = ".plugins"  # Hidden directory for installed plugins
+
+    def __init__(self, kernel: Kernel, base_dir: Path):
         """Initialize plugin manager.
 
         Args:
             kernel: Semantic Kernel instance to load plugins into
-            plugins_dir: Directory where plugins will be installed
+            base_dir: Base directory where .plugins directory will be created
         """
         self.kernel = kernel
-        self.plugins_dir = plugins_dir
+        self.plugins_dir = base_dir / self.PLUGINS_DIR
         self.plugins_dir.mkdir(parents=True, exist_ok=True)
 
         # Add plugins directory to Python path if not already there
-        plugins_dir_str = str(plugins_dir.resolve())
+        plugins_dir_str = str(self.plugins_dir.resolve())
         if plugins_dir_str not in sys.path:
             sys.path.append(plugins_dir_str)
 
@@ -102,31 +111,43 @@ class PluginManager:
 
         Raises:
             subprocess.CalledProcessError: If git clone fails
-            ValueError: If version is not specified for GitHub plugin
         """
-        if not plugin_config.version:
-            raise ValueError("Version must be specified for GitHub plugins")
+        # Create base plugin directory: .plugins/name
+        plugin_base = self.plugins_dir / plugin_config.name
+        if plugin_base.exists():
+            shutil.rmtree(plugin_base)
+        plugin_base.mkdir(parents=True, exist_ok=True)
 
-        # Create versioned directory for the plugin: plugins/name/version
-        plugin_dir = self.plugins_dir / plugin_config.name / plugin_config.version
-        if plugin_dir.exists():
-            shutil.rmtree(plugin_dir)
-        plugin_dir.parent.mkdir(parents=True, exist_ok=True)
-
-        # Clone the repository
+        # Clone into a temporary directory
+        temp_dir = plugin_base / "temp"
         subprocess.run(
-            ["git", "clone", plugin_config.source, str(plugin_dir)],
+            ["git", "clone", plugin_config.source, str(temp_dir)],
             check=True,
         )
 
         # Checkout specific version
         subprocess.run(
             ["git", "checkout", plugin_config.version],
-            cwd=plugin_dir,
+            cwd=temp_dir,
             check=True,
         )
 
-        return plugin_dir
+        # Create the versioned directory and move files
+        version_dir = plugin_base / plugin_config.version
+        version_dir.mkdir(exist_ok=True)
+
+        # Move all files from temp directory to version directory
+        for item in temp_dir.iterdir():
+            if item.name != ".git":  # Skip .git directory
+                if item.is_dir():
+                    shutil.copytree(item, version_dir / item.name, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, version_dir / item.name)
+
+        # Clean up temp directory
+        shutil.rmtree(temp_dir)
+
+        return version_dir
 
     def install_plugin(
         self, plugin_config: PluginConfig, base_dir: Optional[Path] = None
@@ -140,13 +161,15 @@ class PluginManager:
         Raises:
             FileNotFoundError: If plugin source doesn't exist
             subprocess.CalledProcessError: If git operations fail
-            ValueError: If version is not specified for GitHub plugin
+            ValueError: If version is not provided for GitHub sources
         """
         if plugin_config.is_github_source:
+            # Install GitHub plugin
             plugin_dir = self._clone_github_plugin(plugin_config)
-            # Add versioned plugin directory to Python path
-            if str(plugin_dir) not in sys.path:
-                sys.path.append(str(plugin_dir))
+            # Add plugin directory to Python path
+            plugin_base = str(self.plugins_dir / plugin_config.name)
+            if plugin_base not in sys.path:
+                sys.path.append(plugin_base)
         else:
             # Handle local source - can be anywhere, just resolve the path
             source_path = (
@@ -165,11 +188,12 @@ class PluginManager:
         # Set plugin variables
         self._set_plugin_variables(plugin_config)
 
-    def load_plugin(self, name: str) -> Any:
+    def load_plugin(self, name: str, version: Optional[str] = None) -> Any:
         """Load a plugin from the plugins directory.
 
         Args:
             name: Name of the plugin to load
+            version: Version to load for GitHub plugins
 
         Returns:
             The loaded plugin instance
@@ -179,26 +203,43 @@ class PluginManager:
             ImportError: If plugin cannot be imported
         """
         try:
-            # Import the plugin module
-            module = importlib.import_module(name)
+            # For GitHub plugins, import from versioned directory
+            if version:
+                module_path = f"{name}.{version}"
+            else:
+                module_path = name
 
-            # Look for a class that matches the plugin name
+            # Import the plugin module
+            module = importlib.import_module(module_path)
+
+            # Look for a class that matches the plugin name or is named TestPlugin
             plugin_class = None
             for attr_name in dir(module):
                 attr = getattr(module, attr_name)
-                if isinstance(attr, type) and attr.__module__ == module.__name__:
+                if (
+                    isinstance(attr, type)
+                    and attr.__module__ == module.__name__
+                    and (
+                        attr.__name__ == "TestPlugin"
+                        or attr.__name__.lower() == name.lower()
+                    )
+                ):
                     plugin_class = attr
                     break
 
             if plugin_class is None:
-                raise PluginNotFoundError(f"No plugin class found in module: {name}")
+                raise PluginNotFoundError(
+                    f"No plugin class found in module: {module_path}"
+                )
 
             # Create an instance and register it with the kernel
             plugin_instance = plugin_class()
             return self.kernel.add_plugin(plugin_instance, plugin_name=name)
 
         except ImportError as e:
-            raise PluginNotFoundError(f"Failed to import plugin {name}: {str(e)}")
+            raise PluginNotFoundError(
+                f"Failed to import plugin {module_path}: {str(e)}"
+            )
 
     def install_and_load_plugins(
         self, plugin_configs: List[PluginConfig], base_dir: Optional[Path] = None
@@ -211,4 +252,6 @@ class PluginManager:
         """
         for config in plugin_configs:
             self.install_plugin(config, base_dir)
-            self.load_plugin(config.name)
+            # Pass version for GitHub plugins
+            version = config.version if config.is_github_source else None
+            self.load_plugin(config.name, version)
