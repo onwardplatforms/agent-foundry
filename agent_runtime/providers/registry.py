@@ -1,6 +1,6 @@
 """Provider registry for managing available providers."""
 
-from typing import Dict, Optional, Type
+from typing import Optional
 
 from agent_runtime.providers.base import Provider, ProviderConfig, ProviderType
 from agent_runtime.providers.ollama import OllamaProvider

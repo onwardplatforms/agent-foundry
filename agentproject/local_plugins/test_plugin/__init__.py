@@ -1,6 +1,7 @@
 """Local test plugin package."""
 
 import os
+
 from semantic_kernel.functions import kernel_function
 
 

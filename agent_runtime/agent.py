@@ -75,14 +75,11 @@ class Agent:
         """
         provider = model_config["provider"]
         model_name = model_config["name"]
-        settings = model_config.get("settings", {})
 
         if provider == "openai":
             self.logger.debug("Initializing OpenAI service with model: %s", model_name)
             return OpenAIChatCompletion(
                 ai_model_id=model_name,
-                temperature=settings.get("temperature", 0.7),
-                max_tokens=settings.get("max_tokens"),
             )
         elif provider == "ollama":
             self.logger.debug("Initializing Ollama service with model: %s", model_name)
@@ -166,7 +163,8 @@ class Agent:
 
                     # Get the parameter name from the function's first parameter
                     param_name = func.parameters[0].name
-                    arguments = KernelArguments(**{param_name: arg})
+                    arguments = KernelArguments()
+                    arguments[str(param_name)] = arg
 
                     try:
                         # Call the function

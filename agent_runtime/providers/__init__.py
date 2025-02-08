@@ -7,8 +7,8 @@ from agent_runtime.providers.base import (
     ProviderConfig,
     ProviderType,
 )
-from agent_runtime.providers.ollama import OllamaProvider, OllamaSettings
-from agent_runtime.providers.openai import OpenAIProvider, OpenAISettings
+from agent_runtime.providers.ollama import OllamaProvider
+from agent_runtime.providers.openai import OpenAIProvider
 from agent_runtime.providers.registry import get_provider, get_provider_config
 
 __all__ = [

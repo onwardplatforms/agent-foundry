@@ -1,14 +1,10 @@
 """Ollama provider implementation."""
 
 import json
-import logging
-import subprocess
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import AsyncIterator
 
 import aiohttp
 import requests
-from pydantic import BaseModel, Field
 from requests.exceptions import RequestException
 from semantic_kernel.contents import (
     AuthorRole,

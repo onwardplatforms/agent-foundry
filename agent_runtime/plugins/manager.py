@@ -8,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
 
 from semantic_kernel import Kernel
 
@@ -32,11 +31,11 @@ class PluginConfig:
 
         Args:
             source: GitHub repository URL or local path to the plugin
-            version: Optional version (git tag/commit) to use, required for GitHub sources
+            version: Optional version (git tag/commit) to use, required for GitHub sources  # noqa: E501
             variables: Optional plugin-specific configuration variables
 
         Raises:
-            ValueError: If version is not provided for GitHub sources or if version is provided for local sources
+            ValueError: If version is not provided for GitHub sources or if version is provided for local sources  # noqa: E501
         """
         self.source = source
         self.variables = variables or {}
@@ -125,7 +124,13 @@ class PluginManager:
 
         Raises:
             subprocess.CalledProcessError: If git clone fails
+            AssertionError: If version is None (should never happen due to PluginConfig validation)
         """
+        # Version should never be None for GitHub plugins (validated in PluginConfig)
+        assert (
+            plugin_config.version is not None
+        ), "Version must be specified for GitHub plugins"
+
         # Create base plugin directory: .plugins/name
         plugin_base = self.plugins_dir / plugin_config.name
         if plugin_base.exists():
@@ -183,7 +188,7 @@ class PluginManager:
         Raises:
             FileNotFoundError: If plugin source doesn't exist
             subprocess.CalledProcessError: If git operations fail
-            ValueError: If version is not provided for GitHub sources
+            ValueError: If version is not provided for GitHub sources  # noqa: E501
         """
         if plugin_config.is_github_source:
             # Install GitHub plugin
@@ -235,7 +240,7 @@ class PluginManager:
 
         Raises:
             PluginNotFoundError: If plugin cannot be found
-            ImportError: If plugin cannot be imported
+            ImportError: If plugin cannot be imported  # noqa: E501
         """
         try:
             # For GitHub plugins, import from versioned directory
@@ -260,7 +265,7 @@ class PluginManager:
                         f"Neither plugin.py nor __init__.py found in {plugin_dir}"
                     )
 
-            # Look for a class that matches the plugin name or is named Plugin/TestPlugin/ExamplePlugin
+            # Look for a class that matches the plugin name or is named Plugin/TestPlugin/ExamplePlugin  # noqa: E501
             plugin_class = None
             for attr_name in dir(module):
                 attr = getattr(module, attr_name)

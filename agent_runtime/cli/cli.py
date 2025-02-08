@@ -4,13 +4,12 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any, Callable, Coroutine
+from typing import Any, Callable, Coroutine, Dict, cast
 
 import click
 from dotenv import load_dotenv
 
 from agent_runtime.agent import Agent
-from agent_runtime.plugins.manager import PluginConfig
 from agent_runtime.validation import validate_agent_config
 
 # Load environment variables from .env file
@@ -26,7 +25,7 @@ def set_debug_logging(debug: bool) -> None:
         click.echo("Debug mode enabled - logging set to DEBUG level")
 
 
-def load_agent_config(config_path: Path) -> dict:
+def load_agent_config(config_path: Path) -> Dict[Any, Any]:
     """Load and parse an agent configuration file.
 
     Args:
@@ -40,7 +39,7 @@ def load_agent_config(config_path: Path) -> dict:
     """
     try:
         with open(config_path) as f:
-            return json.load(f)
+            return cast(Dict[Any, Any], json.load(f))
     except json.JSONDecodeError as e:
         raise click.ClickException(f"Invalid JSON in config file: {e}")
     except FileNotFoundError:
@@ -99,15 +98,9 @@ def init(config_file: Path) -> None:
             click.echo(f"  - {error}")
         exit(1)
 
-    # Load the config
-    config = load_agent_config(config_file)
-
     # Create plugins directory next to config file
     plugins_dir = config_file.parent / "plugins"
     plugins_dir.mkdir(exist_ok=True)
-
-    # Create agent to initialize plugins
-    agent = Agent.from_config(config, config_file.parent)
 
     click.echo("\nInitialization complete! You can now run the agent.")
 

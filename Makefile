@@ -59,6 +59,6 @@ format:
 	source $(VENV)/bin/activate && $(ISORT) .
 
 check:
-	source $(VENV)/bin/activate && $(MYPY) --package agent_foundry
+	source $(VENV)/bin/activate && $(MYPY) --package agent_runtime
 
 all: format lint check test

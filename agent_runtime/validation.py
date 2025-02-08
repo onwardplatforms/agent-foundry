@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import jsonschema
 
@@ -15,7 +15,7 @@ def load_schema() -> Dict[str, Any]:
     """
     schema_path = Path(__file__).parent / "schema" / "agent_schema.json"
     with open(schema_path) as f:
-        return json.load(f)
+        return cast(Dict[str, Any], json.load(f))
 
 
 def validate_agent_config(

@@ -1,9 +1,7 @@
 """OpenAI provider implementation."""
 
-import logging
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import AsyncIterator
 
-from pydantic import BaseModel, Field
 from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
 from semantic_kernel.connectors.ai.prompt_execution_settings import (
     PromptExecutionSettings,
