@@ -1,0 +1,11 @@
+{
+  "plugins": [
+    {
+      "name": "test_plugin",
+      "source": "local_plugins/test_plugin",
+      "version": null,
+      "branch": null,
+      "sha": "caeb4b9091e724abf36fb9dba792a8caa0db916ab16cf721f4ab88e2d420c43c"
+    }
+  ]
+}
