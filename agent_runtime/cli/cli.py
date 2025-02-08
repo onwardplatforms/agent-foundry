@@ -98,9 +98,17 @@ def init(config_file: Path) -> None:
             click.echo(f"  - {error}")
         exit(1)
 
+    # Load the config
+    config = load_agent_config(config_file)
+
     # Create plugins directory next to config file
     plugins_dir = config_file.parent / "plugins"
     plugins_dir.mkdir(exist_ok=True)
+
+    # Create agent to install plugins
+    click.echo("\nInstalling plugins...")
+    Agent.from_config(config, config_file.parent)
+    click.echo("Plugins installed successfully!")
 
     click.echo("\nInitialization complete! You can now run the agent.")
 

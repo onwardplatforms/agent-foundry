@@ -83,17 +83,25 @@ def test_plugin_config_local_source(valid_plugin_config: Dict[str, Any]) -> None
 
 def test_plugin_config_validation() -> None:
     """Test plugin configuration validation."""
-    # Test GitHub source requires version
-    with pytest.raises(
-        ValueError, match="Version must be specified for GitHub plugins"
-    ):
-        PluginConfig(source="github.com/user/repo")
+    # Test GitHub source with neither version nor branch defaults to main branch
+    config = PluginConfig(source="github.com/user/repo")
+    assert config.branch == "main"
+    assert config.version is None
 
-    # Test local source cannot have version
+    # Test GitHub source cannot have both version and branch
+    with pytest.raises(ValueError, match="Cannot specify both version and branch"):
+        PluginConfig(source="github.com/user/repo", version="1.0.0", branch="main")
+
+    # Test local source cannot have version or branch
     with pytest.raises(
-        ValueError, match="Version cannot be specified for local plugins"
+        ValueError, match="Version/branch cannot be specified for local plugins"
     ):
         PluginConfig(source="local/plugin", version="1.0.0")
+
+    with pytest.raises(
+        ValueError, match="Version/branch cannot be specified for local plugins"
+    ):
+        PluginConfig(source="local/plugin", branch="main")
 
 
 @pytest.fixture

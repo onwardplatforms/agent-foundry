@@ -73,7 +73,11 @@
                     },
                     "version": {
                         "type": "string",
-                        "description": "Version of the plugin to use (git tag or commit hash). Required for GitHub sources, invalid for local sources."
+                        "description": "Version of the plugin to use (git tag or commit hash). Cannot be used with branch."
+                    },
+                    "branch": {
+                        "type": "string",
+                        "description": "Branch to use for the plugin. Cannot be used with version. Defaults to 'main' if neither version nor branch is specified."
                     },
                     "variables": {
                         "type": "object",
@@ -97,8 +101,43 @@
                             }
                         },
                         "then": {
-                            "required": [
-                                "version"
+                            "oneOf": [
+                                {
+                                    "required": [
+                                        "version"
+                                    ],
+                                    "not": {
+                                        "required": [
+                                            "branch"
+                                        ]
+                                    }
+                                },
+                                {
+                                    "required": [
+                                        "branch"
+                                    ],
+                                    "not": {
+                                        "required": [
+                                            "version"
+                                        ]
+                                    }
+                                },
+                                {
+                                    "not": {
+                                        "anyOf": [
+                                            {
+                                                "required": [
+                                                    "version"
+                                                ]
+                                            },
+                                            {
+                                                "required": [
+                                                    "branch"
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                }
                             ]
                         }
                     },
@@ -114,8 +153,17 @@
                         },
                         "then": {
                             "not": {
-                                "required": [
-                                    "version"
+                                "anyOf": [
+                                    {
+                                        "required": [
+                                            "version"
+                                        ]
+                                    },
+                                    {
+                                        "required": [
+                                            "branch"
+                                        ]
+                                    }
                                 ]
                             }
                         }

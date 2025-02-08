@@ -25,27 +25,36 @@ class PluginConfig:
         self,
         source: str,
         version: Optional[str] = None,
+        branch: Optional[str] = None,
         variables: Optional[Dict[str, str]] = None,
     ):
         """Initialize plugin configuration.
 
         Args:
             source: GitHub repository URL or local path to the plugin
-            version: Optional version (git tag/commit) to use, required for GitHub sources  # noqa: E501
+            version: Optional version (git tag/commit) to use, cannot be used with branch
+            branch: Optional branch to use, cannot be used with version
             variables: Optional plugin-specific configuration variables
 
         Raises:
-            ValueError: If version is not provided for GitHub sources or if version is provided for local sources  # noqa: E501
+            ValueError: If both version and branch are specified, or if version/branch is provided for local sources
         """
         self.source = source
         self.variables = variables or {}
 
-        # Validate version requirement for GitHub sources
-        if self.is_github_source and not version:
-            raise ValueError("Version must be specified for GitHub plugins")
-        if not self.is_github_source and version:
-            raise ValueError("Version cannot be specified for local plugins")
+        # Validate version/branch requirements for GitHub sources
+        if self.is_github_source:
+            if version and branch:
+                raise ValueError("Cannot specify both version and branch")
+            if not version and not branch:
+                # Default to main branch if neither is specified
+                branch = "main"
+        else:
+            if version or branch:
+                raise ValueError("Version/branch cannot be specified for local plugins")
+
         self.version = version
+        self.branch = branch
 
     @property
     def name(self) -> str:
@@ -74,6 +83,15 @@ class PluginConfig:
     def is_local_source(self) -> bool:
         """Check if the source is a local path."""
         return not self.is_github_source
+
+    @property
+    def git_ref(self) -> str:
+        """Get the git reference (version or branch) to use."""
+        if not self.is_github_source:
+            raise ValueError("git_ref is only valid for GitHub sources")
+        return (
+            self.version or self.branch or "main"
+        )  # Should never be None due to init logic
 
 
 class PluginManager:
@@ -123,14 +141,8 @@ class PluginManager:
             Path to the cloned repository
 
         Raises:
-            subprocess.CalledProcessError: If git clone fails
-            AssertionError: If version is None (should never happen due to PluginConfig validation)
+            subprocess.CalledProcessError: If git operations fail
         """
-        # Version should never be None for GitHub plugins (validated in PluginConfig)
-        assert (
-            plugin_config.version is not None
-        ), "Version must be specified for GitHub plugins"
-
         # Create base plugin directory: .plugins/name
         plugin_base = self.plugins_dir / plugin_config.name
         if plugin_base.exists():
@@ -150,15 +162,50 @@ class PluginManager:
             check=True,
         )
 
-        # Checkout specific version
-        subprocess.run(
-            ["git", "checkout", plugin_config.version],
-            cwd=temp_dir,
-            check=True,
-        )
+        # If using version, try both with and without 'v' prefix
+        git_ref = plugin_config.git_ref
+        if plugin_config.version:
+            # Try original version first
+            try:
+                subprocess.run(
+                    ["git", "checkout", git_ref],
+                    cwd=temp_dir,
+                    check=True,
+                )
+            except subprocess.CalledProcessError:
+                # If that fails, try with 'v' prefix if it doesn't already have one
+                if not git_ref.startswith("v"):
+                    try:
+                        v_ref = f"v{git_ref}"
+                        subprocess.run(
+                            ["git", "checkout", v_ref],
+                            cwd=temp_dir,
+                            check=True,
+                        )
+                        git_ref = (
+                            v_ref  # Update git_ref to include 'v' for directory naming
+                        )
+                    except subprocess.CalledProcessError:
+                        # If both attempts fail, raise the original error
+                        raise subprocess.CalledProcessError(
+                            1,
+                            f"git checkout failed for both '{git_ref}' and 'v{git_ref}'",
+                        )
+        else:
+            # For branches, just try the checkout directly
+            subprocess.run(
+                ["git", "checkout", git_ref],
+                cwd=temp_dir,
+                check=True,
+            )
+
+        # Create a Python-safe version of the git ref for the directory name
+        safe_ref = git_ref.replace(".", "_")
+        if safe_ref.startswith("v"):
+            safe_ref = safe_ref[1:]  # Remove 'v' prefix for module name
 
         # Create the versioned directory and move files
-        version_dir = plugin_base / plugin_config.version
+        version_dir = plugin_base / safe_ref
         if version_dir.exists():
             shutil.rmtree(version_dir)
         version_dir.mkdir(exist_ok=True)
@@ -228,24 +275,28 @@ class PluginManager:
         # Set plugin variables
         self._set_plugin_variables(plugin_config)
 
-    def load_plugin(self, name: str, version: Optional[str] = None) -> Any:
+    def load_plugin(self, name: str, git_ref: Optional[str] = None) -> Any:
         """Load a plugin from the plugins directory.
 
         Args:
             name: Name of the plugin to load
-            version: Version to load for GitHub plugins
+            git_ref: Git reference (version or branch) for GitHub plugins
 
         Returns:
             The loaded plugin instance
 
         Raises:
             PluginNotFoundError: If plugin cannot be found
-            ImportError: If plugin cannot be imported  # noqa: E501
+            ImportError: If plugin cannot be imported
         """
         try:
             # For GitHub plugins, import from versioned directory
-            if version:
-                module_path = f"{name}.{version}"
+            if git_ref:
+                # Replace dots with underscores in version numbers for valid Python module names
+                safe_ref = git_ref.replace(".", "_")
+                if safe_ref.startswith("v"):
+                    safe_ref = safe_ref[1:]  # Remove 'v' prefix for module name
+                module_path = f"{name}.{safe_ref}"
                 module = importlib.import_module(module_path)
             else:
                 # For local plugins, try importing plugin.py directly
@@ -265,7 +316,7 @@ class PluginManager:
                         f"Neither plugin.py nor __init__.py found in {plugin_dir}"
                     )
 
-            # Look for a class that matches the plugin name or is named Plugin/TestPlugin/ExamplePlugin  # noqa: E501
+            # Look for a class that matches the plugin name or is named Plugin/TestPlugin/ExamplePlugin
             plugin_class = None
             for attr_name in dir(module):
                 attr = getattr(module, attr_name)
@@ -307,6 +358,6 @@ class PluginManager:
         """
         for config in plugin_configs:
             self.install_plugin(config, base_dir)
-            # Pass version for GitHub plugins
-            version = config.version if config.is_github_source else None
-            self.load_plugin(config.name, version)
+            # Pass git_ref for GitHub plugins
+            git_ref = config.git_ref if config.is_github_source else None
+            self.load_plugin(config.name, git_ref)

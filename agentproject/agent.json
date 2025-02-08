@@ -13,7 +13,7 @@
     "plugins": [
         {
             "source": "https://github.com/jsoconno/sk-test-plugin",
-            "version": "main",
+            "branch": "main",
             "variables": {}
         }
     ]
