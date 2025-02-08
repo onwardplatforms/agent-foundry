@@ -59,6 +59,8 @@ class Agent:
         self.model_config = model_config
         self.plugins_dir = plugins_dir
 
+        self.logger.info("Agent '%s' initialized.", self.name)
+
     def _setup_chat_service(
         self, model_config: Dict[str, Any]
     ) -> Union[OpenAIChatCompletion, OllamaChatCompletion]:
@@ -78,9 +80,7 @@ class Agent:
 
         if provider == "openai":
             self.logger.debug("Initializing OpenAI service with model: %s", model_name)
-            return OpenAIChatCompletion(
-                ai_model_id=model_name,
-            )
+            return OpenAIChatCompletion(ai_model_id=model_name)
         elif provider == "ollama":
             self.logger.debug("Initializing Ollama service with model: %s", model_name)
             return OllamaChatCompletion(ai_model_id=model_name)
@@ -100,33 +100,48 @@ class Agent:
         Returns:
             The created agent instance
         """
-        # Create kernel and plugin manager
+        logger = logging.getLogger("agent_runtime")
+        logger.debug("Creating agent from config with base_dir=%s", base_dir)
+
+        # Initialize a fresh kernel
         kernel = Kernel()
         plugin_manager = PluginManager(kernel, base_dir or Path.cwd())
 
-        # Create and load plugins
-        plugin_configs = [
-            PluginConfig(
-                source=p["source"],
-                version=p.get("version"),
-                variables=p.get("variables", {}),
-            )
-            for p in config.get("plugins", [])
-        ]
+        # Extract plugin configs from the agent config JSON
+        plugin_data = config.get("plugins", [])
+        logger.debug("Found %d plugin definitions in agent config.", len(plugin_data))
+
+        plugin_configs = []
+        for p in plugin_data:
+            try:
+                pc = PluginConfig(
+                    source=p["source"],
+                    version=p.get("version"),
+                    branch=p.get("branch"),
+                    variables=p.get("variables", {}),
+                )
+                plugin_configs.append(pc)
+            except (KeyError, ValueError) as ex:
+                logger.error("Invalid plugin configuration: %s", ex)
+                continue
+
+        # Install and load all plugins
         plugin_manager.install_and_load_plugins(plugin_configs, base_dir=base_dir)
 
         # Create agent instance with the configured kernel
-        return cls(
+        agent = cls(
             name=config["name"],
             description=config["description"],
             system_prompt=config["system_prompt"],
             model_config=config["model"],
-            kernel=kernel,  # Pass the configured kernel
+            kernel=kernel,
             plugins_dir=base_dir,
         )
+        logger.info("Agent '%s' created from config successfully.", agent.name)
+        return agent
 
     async def chat(self, message: str) -> AsyncIterator[StreamingChatMessageContent]:
-        """Process a chat message and return the response.
+        """Process a chat message and return the response as a streaming generator.
 
         Args:
             message: User message
@@ -134,64 +149,82 @@ class Agent:
         Returns:
             Async generator of response chunks
         """
-        self.logger.debug("Processing chat message: %s", message)
-
-        # Add user message to history
+        self.logger.debug("Received user message: %s", message)
         self.chat_history.add_user_message(message)
 
         # Debug: Log available plugins and functions
-        self.logger.debug("Available plugins: %s", self.kernel.plugins)
+        self.logger.debug(
+            "Agent '%s' has %d plugins loaded.", self.name, len(self.kernel.plugins)
+        )
         for plugin_name, plugin in self.kernel.plugins.items():
-            self.logger.debug("Plugin %s functions: %s", plugin_name, plugin.functions)
+            self.logger.debug(
+                "Plugin [%s] has functions: %s",
+                plugin_name,
+                list(plugin.functions.keys()),
+            )
 
-        # Try to find a plugin function that matches the message
-        # For example, if message starts with "greet", use the greet function
+        # Attempt function matching based on message prefix
         for plugin_name, plugin in self.kernel.plugins.items():
             for func_name, func in plugin.functions.items():
-                self.logger.debug("Checking function: %s", func_name)
                 if message.lower().startswith(func_name.lower()):
-                    self.logger.debug("Found matching function: %s", func_name)
-                    # Extract the argument from the message
+                    self.logger.debug(
+                        "Message matched plugin function '%s.%s'",
+                        plugin_name,
+                        func_name,
+                    )
+
+                    # Extract argument from the tail of the message
                     arg = message[len(func_name) :].strip()
                     if not arg:
-                        arg = "World"  # Default argument
+                        arg = "World"  # Default argument for demonstration
+                        self.logger.debug("No argument found; using default: '%s'", arg)
 
-                    self.logger.debug("Function argument: %s", arg)
-
-                    # Create arguments for the function
                     from semantic_kernel.functions import KernelArguments
 
-                    # Get the parameter name from the function's first parameter
-                    param_name = func.parameters[0].name
+                    try:
+                        param_name = func.parameters[0].name
+                    except IndexError:
+                        self.logger.warning(
+                            "Function '%s' expects no parameters, skipping argument assignment.",
+                            func_name,
+                        )
+                        param_name = None
+
                     arguments = KernelArguments()
-                    arguments[str(param_name)] = arg
+                    if param_name:
+                        arguments[str(param_name)] = arg
 
                     try:
-                        # Call the function
                         result = await func.invoke(
                             kernel=self.kernel, arguments=arguments
                         )
+                        self.logger.debug(
+                            "Function '%s.%s' returned: %s",
+                            plugin_name,
+                            func_name,
+                            result,
+                        )
 
-                        # Create a response chunk
+                        # Yield streaming chunk
                         yield StreamingChatMessageContent(
                             role=AuthorRole.ASSISTANT,
                             content=str(result),
                             choice_index=0,
                         )
-
-                        # Add assistant's response to history
                         self.chat_history.add_assistant_message(str(result))
                         return
                     except Exception as e:
-                        error_msg = f"Function failed. Error: {str(e)}"
+                        error_msg = (
+                            f"Plugin function '{func_name}' failed. Error: {str(e)}"
+                        )
                         self.logger.error(error_msg)
                         yield StreamingChatMessageContent(
                             role=AuthorRole.ASSISTANT, content=error_msg, choice_index=0
                         )
                         return
 
-        # If no plugin function matches, use the chat service
-        # Convert model settings to prompt execution settings
+        # If no plugin function matches, fallback to the chat model
+        self.logger.debug("No function matched, using chat service for agent response.")
         settings = self.model_config.get("settings", {})
         execution_settings = PromptExecutionSettings(
             service_id=None,
@@ -201,14 +234,13 @@ class Agent:
             max_tokens=settings.get("max_tokens"),
         )
 
-        # Get response using the service
+        chunk = None
         async for chunk in self.chat_service.get_streaming_chat_message_content(
             chat_history=self.chat_history,
             settings=execution_settings,
         ):
-            if chunk is not None:
+            if chunk:
                 yield chunk
 
-        # Add assistant's response to history after it's complete
-        if chunk is not None:
+        if chunk:
             self.chat_history.add_assistant_message(chunk.content)

@@ -1,6 +1,7 @@
 """Plugin manager for handling SK plugin installation and loading."""
 
 import importlib
+import logging
 import os
 import re
 import shutil
@@ -45,13 +46,15 @@ class PluginConfig:
         # Validate version/branch requirements for GitHub sources
         if self.is_github_source:
             if version and branch:
-                raise ValueError("Cannot specify both version and branch")
+                raise ValueError("Cannot specify both version and branch for a plugin.")
             if not version and not branch:
                 # Default to main branch if neither is specified
                 branch = "main"
         else:
             if version or branch:
-                raise ValueError("Version/branch cannot be specified for local plugins")
+                raise ValueError(
+                    "Version/branch cannot be specified for local plugins."
+                )
 
         self.version = version
         self.branch = branch
@@ -61,8 +64,8 @@ class PluginConfig:
         """Get the plugin name derived from the source path."""
         if self.is_github_source:
             # Extract repo name from GitHub URL and sanitize
-            parts = self.source.split("/")
-            raw_name = parts[-1]
+            parts = self.source.rstrip("/").split("/")
+            raw_name = parts[-1] if parts else "unknown_plugin"
         else:
             # Use last part of local path and sanitize
             raw_name = Path(self.source).name
@@ -88,10 +91,9 @@ class PluginConfig:
     def git_ref(self) -> str:
         """Get the git reference (version or branch) to use."""
         if not self.is_github_source:
-            raise ValueError("git_ref is only valid for GitHub sources")
-        return (
-            self.version or self.branch or "main"
-        )  # Should never be None due to init logic
+            raise ValueError("git_ref is only valid for GitHub sources.")
+        # Should never be None due to init logic
+        return self.version or self.branch or "main"
 
 
 class PluginManager:
@@ -106,6 +108,7 @@ class PluginManager:
             kernel: Semantic Kernel instance to load plugins into
             base_dir: Base directory where .plugins directory will be created
         """
+        self.logger = logging.getLogger(__name__)
         self.kernel = kernel
         self.plugins_dir = base_dir / self.PLUGINS_DIR
         self.plugins_dir.mkdir(parents=True, exist_ok=True)
@@ -114,6 +117,9 @@ class PluginManager:
         plugins_dir_str = str(self.plugins_dir.resolve())
         if plugins_dir_str not in sys.path:
             sys.path.append(plugins_dir_str)
+            self.logger.debug(
+                "Added plugins directory to sys.path: %s", plugins_dir_str
+            )
 
     def _set_plugin_variables(self, plugin_config: PluginConfig) -> None:
         """Set plugin variables in environment.
@@ -124,12 +130,25 @@ class PluginManager:
         for key, value in plugin_config.variables.items():
             # Check if value references an environment variable
             if value.startswith("$"):
-                env_var = value[1:]  # Remove $
-                value = os.getenv(env_var, "")
+                env_var = value[1:]  # Remove '$'
+                resolved = os.getenv(env_var, "")
+                if not resolved:
+                    self.logger.warning(
+                        "Environment variable '%s' not found for plugin variable '%s'. Using empty string.",
+                        env_var,
+                        key,
+                    )
+                value = resolved
 
             # Set with AGENT_VAR_ prefix
             env_key = f"AGENT_VAR_{key.upper()}"
             os.environ[env_key] = value
+            self.logger.debug(
+                "Set environment variable '%s' for plugin '%s': '%s'",
+                env_key,
+                plugin_config.name,
+                value,
+            )
 
     def _clone_github_plugin(self, plugin_config: PluginConfig) -> Path:
         """Clone a plugin from GitHub.
@@ -143,84 +162,86 @@ class PluginManager:
         Raises:
             subprocess.CalledProcessError: If git operations fail
         """
-        # Create base plugin directory: .plugins/name
+        self.logger.info("Cloning GitHub plugin from '%s'.", plugin_config.source)
         plugin_base = self.plugins_dir / plugin_config.name
         if plugin_base.exists():
+            self.logger.debug("Removing existing directory: %s", plugin_base)
             shutil.rmtree(plugin_base)
         plugin_base.mkdir(parents=True, exist_ok=True)
 
-        # Clone into a temporary directory
         temp_dir = plugin_base / "temp"
-        # Handle URLs that already include https://
+
+        # Ensure we have a clone URL with https://
         clone_url = (
             plugin_config.source
             if plugin_config.source.startswith("https://")
             else f"https://{plugin_config.source}"
         )
-        subprocess.run(
-            ["git", "clone", clone_url, str(temp_dir)],
-            check=True,
+        self.logger.debug("Git clone URL: %s", clone_url)
+
+        subprocess.run(["git", "clone", clone_url, str(temp_dir)], check=True)
+
+        git_ref = plugin_config.git_ref
+        self.logger.info(
+            "Checking out ref '%s' for plugin '%s'.", git_ref, plugin_config.name
         )
 
-        # If using version, try both with and without 'v' prefix
-        git_ref = plugin_config.git_ref
+        # Attempt direct checkout
         if plugin_config.version:
-            # Try original version first
             try:
-                subprocess.run(
-                    ["git", "checkout", git_ref],
-                    cwd=temp_dir,
-                    check=True,
-                )
-            except subprocess.CalledProcessError:
-                # If that fails, try with 'v' prefix if it doesn't already have one
+                subprocess.run(["git", "checkout", git_ref], cwd=temp_dir, check=True)
+            except subprocess.CalledProcessError as e:
+                # If that fails, try with 'v' prefix if not already present
                 if not git_ref.startswith("v"):
+                    v_ref = f"v{git_ref}"
+                    self.logger.warning(
+                        "Checkout '%s' failed. Trying 'v%s' instead.", git_ref, git_ref
+                    )
                     try:
-                        v_ref = f"v{git_ref}"
                         subprocess.run(
-                            ["git", "checkout", v_ref],
-                            cwd=temp_dir,
-                            check=True,
+                            ["git", "checkout", v_ref], cwd=temp_dir, check=True
                         )
-                        git_ref = (
-                            v_ref  # Update git_ref to include 'v' for directory naming
-                        )
+                        git_ref = v_ref  # Update to reflect new ref
                     except subprocess.CalledProcessError:
-                        # If both attempts fail, raise the original error
-                        raise subprocess.CalledProcessError(
-                            1,
-                            f"git checkout failed for both '{git_ref}' and 'v{git_ref}'",
+                        self.logger.error(
+                            "git checkout failed for both '%s' and '%s'.",
+                            git_ref,
+                            v_ref,
                         )
+                        raise e
+                else:
+                    self.logger.error("git checkout failed for ref '%s'.", git_ref)
+                    raise e
         else:
-            # For branches, just try the checkout directly
-            subprocess.run(
-                ["git", "checkout", git_ref],
-                cwd=temp_dir,
-                check=True,
-            )
+            # If branch-based or default main
+            subprocess.run(["git", "checkout", git_ref], cwd=temp_dir, check=True)
 
         # Create a Python-safe version of the git ref for the directory name
         safe_ref = git_ref.replace(".", "_")
         if safe_ref.startswith("v"):
             safe_ref = safe_ref[1:]  # Remove 'v' prefix for module name
 
-        # Create the versioned directory and move files
         version_dir = plugin_base / safe_ref
         if version_dir.exists():
+            self.logger.debug("Removing existing version directory: %s", version_dir)
             shutil.rmtree(version_dir)
         version_dir.mkdir(exist_ok=True)
 
         # Move all files from temp directory to version directory
         for item in temp_dir.iterdir():
-            if item.name != ".git":  # Skip .git directory
-                if item.is_dir():
-                    shutil.copytree(item, version_dir / item.name, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(item, version_dir / item.name)
+            if item.name == ".git":
+                continue  # Skip .git
+            dest = version_dir / item.name
+            if item.is_dir():
+                shutil.copytree(item, dest, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, dest)
 
-        # Clean up temp directory
+        # Clean up temp dir
         shutil.rmtree(temp_dir)
-
+        self.logger.info(
+            "Cloned plugin '%s' to directory: %s", plugin_config.name, version_dir
+        )
         return version_dir
 
     def install_plugin(
@@ -235,45 +256,58 @@ class PluginManager:
         Raises:
             FileNotFoundError: If plugin source doesn't exist
             subprocess.CalledProcessError: If git operations fail
-            ValueError: If version is not provided for GitHub sources  # noqa: E501
         """
+        self.logger.info(
+            "Installing plugin '%s' from source '%s'.",
+            plugin_config.name,
+            plugin_config.source,
+        )
+
         if plugin_config.is_github_source:
-            # Install GitHub plugin
             plugin_dir = self._clone_github_plugin(plugin_config)
-            # Add plugin directory to Python path
             plugin_base = str(self.plugins_dir / plugin_config.name)
             if plugin_base not in sys.path:
                 sys.path.append(plugin_base)
+                self.logger.debug("Added plugin directory to sys.path: %s", plugin_base)
         else:
-            # Handle local source - can be anywhere, just resolve the path
+            # Handle local source
             source_path = (
                 Path(plugin_config.source)
                 if base_dir is None
-                else base_dir / plugin_config.source
+                else (base_dir / plugin_config.source)
             ).resolve()
 
             if not source_path.exists():
+                self.logger.error("Local plugin source not found: %s", source_path)
                 raise FileNotFoundError(f"Plugin source path not found: {source_path}")
 
-            # Create plugin directory and copy files
             plugin_dir = self.plugins_dir / plugin_config.name
             if plugin_dir.exists():
+                self.logger.debug("Removing existing plugin directory: %s", plugin_dir)
                 shutil.rmtree(plugin_dir)
             plugin_dir.mkdir(parents=True, exist_ok=True)
 
-            # Copy all files from source to plugin directory
+            self.logger.debug(
+                "Copying local plugin files from '%s' to '%s'.", source_path, plugin_dir
+            )
             for item in source_path.iterdir():
+                dest = plugin_dir / item.name
                 if item.is_dir():
-                    shutil.copytree(item, plugin_dir / item.name, dirs_exist_ok=True)
+                    shutil.copytree(item, dest, dirs_exist_ok=True)
                 else:
-                    shutil.copy2(item, plugin_dir / item.name)
+                    shutil.copy2(item, dest)
 
-            # Add plugin directory to Python path
             if str(plugin_dir) not in sys.path:
                 sys.path.append(str(plugin_dir))
+                self.logger.debug(
+                    "Added local plugin directory to sys.path: %s", plugin_dir
+                )
 
-        # Set plugin variables
+        self.logger.debug(
+            "Setting plugin variables (if any) for '%s'.", plugin_config.name
+        )
         self._set_plugin_variables(plugin_config)
+        self.logger.info("Plugin '%s' installed successfully!", plugin_config.name)
 
     def load_plugin(self, name: str, git_ref: Optional[str] = None) -> Any:
         """Load a plugin from the plugins directory.
@@ -289,34 +323,39 @@ class PluginManager:
             PluginNotFoundError: If plugin cannot be found
             ImportError: If plugin cannot be imported
         """
+        self.logger.info(
+            "Loading plugin '%s' (ref='%s').", name, git_ref if git_ref else "local"
+        )
         try:
-            # For GitHub plugins, import from versioned directory
+            module = None
             if git_ref:
-                # Replace dots with underscores in version numbers for valid Python module names
+                # For GitHub plugins, import from versioned directory
                 safe_ref = git_ref.replace(".", "_")
                 if safe_ref.startswith("v"):
-                    safe_ref = safe_ref[1:]  # Remove 'v' prefix for module name
+                    safe_ref = safe_ref[1:]
                 module_path = f"{name}.{safe_ref}"
+                self.logger.debug("Importing plugin module path: %s", module_path)
                 module = importlib.import_module(module_path)
             else:
-                # For local plugins, try importing plugin.py directly
+                # For local plugins, check plugin.py or __init__.py
                 plugin_dir = self.plugins_dir / name
                 if not plugin_dir.exists():
                     raise PluginNotFoundError(
                         f"Plugin directory not found: {plugin_dir}"
                     )
 
-                # Try plugin.py first, then __init__.py
                 if (plugin_dir / "plugin.py").exists():
+                    self.logger.debug("Importing 'plugin.py' from: %s", plugin_dir)
                     module = importlib.import_module("plugin")
                 elif (plugin_dir / "__init__.py").exists():
+                    self.logger.debug("Importing '__init__.py' from: %s", plugin_dir)
                     module = importlib.import_module(name)
                 else:
                     raise PluginNotFoundError(
                         f"Neither plugin.py nor __init__.py found in {plugin_dir}"
                     )
 
-            # Look for a class that matches the plugin name or is named Plugin/TestPlugin/ExamplePlugin
+            # Search for a viable plugin class
             plugin_class = None
             for attr_name in dir(module):
                 attr = getattr(module, attr_name)
@@ -324,9 +363,7 @@ class PluginManager:
                     isinstance(attr, type)
                     and attr.__module__ == module.__name__
                     and (
-                        attr.__name__ == "Plugin"
-                        or attr.__name__ == "TestPlugin"
-                        or attr.__name__ == "ExamplePlugin"
+                        attr.__name__ in ["Plugin", "TestPlugin", "ExamplePlugin"]
                         or attr.__name__.lower() == name.lower()
                     )
                 ):
@@ -334,15 +371,24 @@ class PluginManager:
                     break
 
             if plugin_class is None:
+                self.logger.error(
+                    "No plugin class found in module '%s'.", module.__name__
+                )
                 raise PluginNotFoundError(
                     f"No plugin class found in module: {module.__name__}"
                 )
 
-            # Create an instance and register it with the kernel
             plugin_instance = plugin_class()
-            return self.kernel.add_plugin(plugin_instance, plugin_name=name)
+            self.logger.debug(
+                "Registering plugin instance '%s' with the kernel...",
+                plugin_class.__name__,
+            )
+            result = self.kernel.add_plugin(plugin_instance, plugin_name=name)
+            self.logger.info("Plugin '%s' loaded and registered successfully!", name)
+            return result
 
         except ImportError as e:
+            self.logger.exception("Failed to import plugin '%s'.", name)
             raise PluginNotFoundError(
                 f"Failed to import plugin {name}: {str(e)}"
             ) from e
@@ -355,9 +401,31 @@ class PluginManager:
         Args:
             plugin_configs: List of plugin configurations
             base_dir: Optional base directory for resolving relative paths
+
+        Raises:
+            Exception: If any plugin fails to install or load
         """
+        self.logger.info("Installing and loading %d plugins...", len(plugin_configs))
+
         for config in plugin_configs:
-            self.install_plugin(config, base_dir)
-            # Pass git_ref for GitHub plugins
-            git_ref = config.git_ref if config.is_github_source else None
-            self.load_plugin(config.name, git_ref)
+            try:
+                self.logger.debug(
+                    "Processing plugin config: source=%s, version=%s, branch=%s",
+                    config.source,
+                    config.version,
+                    config.branch,
+                )
+                self.install_plugin(config, base_dir)
+                # Pass git_ref for GitHub plugins
+                git_ref = config.git_ref if config.is_github_source else None
+                self.load_plugin(config.name, git_ref)
+            except Exception as e:
+                # If a plugin fails, log it and raise immediately
+                self.logger.exception(
+                    "Error while installing/loading plugin '%s': %s",
+                    config.name,
+                    str(e),
+                )
+                raise
+
+        self.logger.info("Finished installing/loading plugins.")
