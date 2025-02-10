@@ -46,7 +46,8 @@ class HCLConfigLoader:
                 )
 
                 if block_type == "runtime":
-                    self.runtime = block_value
+                    # Store the entire runtime block
+                    self.runtime = block
                 elif block_type == "variable":
                     self.variables[block_name] = block_value
                 elif block_type == "model":
@@ -65,16 +66,69 @@ class HCLConfigLoader:
         logger.debug("Processed variables: %s", processed_vars)
         self.variables = processed_vars
 
+    def _interpolate_value(self, value: Any) -> Any:
+        """Interpolate a value, replacing any variable, model, or plugin references."""
+        if isinstance(value, str):
+            # Handle ${type.name} syntax
+            if value.startswith("${") and value.endswith("}"):
+                ref = value[2:-1]  # Remove ${ and }
+                ref_type, ref_name = ref.split(".", 1)
+                if ref_type == "var":
+                    return self.variables.get(ref_name)
+                elif ref_type == "model":
+                    return dict(self.models.get(ref_name, {}))
+                elif ref_type == "plugin":
+                    plugin_config = dict(self.plugins.get(ref_name, {}))
+                    if plugin_config:
+                        processed_plugin = {
+                            "source": plugin_config["source"],
+                            "variables": plugin_config.get("variables", {}),
+                        }
+                        if "version" in plugin_config:
+                            processed_plugin["version"] = plugin_config["version"]
+                        return processed_plugin
+                    return None
+            # Handle type.name syntax
+            elif "." in value:
+                ref_type, ref_name = value.split(".", 1)
+                if ref_type == "var":
+                    # If this is a string that contains var.name, replace it with the value
+                    if value == f"var.{ref_name}":
+                        return self.variables.get(ref_name)
+                    # Otherwise, do string interpolation
+                    var_value = self.variables.get(ref_name)
+                    if var_value is not None:
+                        return value.replace(f"var.{ref_name}", str(var_value))
+                elif ref_type == "model":
+                    if value == f"model.{ref_name}":
+                        return dict(self.models.get(ref_name, {}))
+                elif ref_type == "plugin":
+                    if value == f"plugin.{ref_name}":
+                        plugin_config = dict(self.plugins.get(ref_name, {}))
+                        if plugin_config:
+                            processed_plugin = {
+                                "source": plugin_config["source"],
+                                "variables": plugin_config.get("variables", {}),
+                            }
+                            if "version" in plugin_config:
+                                processed_plugin["version"] = plugin_config["version"]
+                            return processed_plugin
+                        return None
+        elif isinstance(value, dict):
+            return {k: self._interpolate_value(v) for k, v in value.items()}
+        elif isinstance(value, list):
+            return [self._interpolate_value(v) for v in value]
+        return value
+
     def _process_models(self):
         """Process all models after merging configurations"""
         logger.debug("Processing models: %s", self.models)
         for model_name, model_config in self.models.items():
             # Replace variable references
             if "settings" in model_config:
-                for key, value in model_config["settings"].items():
-                    if isinstance(value, str) and value.startswith("var."):
-                        var_name = value.split(".")[1]
-                        model_config["settings"][key] = self.variables.get(var_name)
+                model_config["settings"] = self._interpolate_value(
+                    model_config["settings"]
+                )
         logger.debug("Processed models: %s", self.models)
 
     def _process_plugins(self):
@@ -117,14 +171,13 @@ class HCLConfigLoader:
             if "model" in agent_config:
                 model_ref = agent_config["model"]
                 logger.debug("Processing model reference: %s", model_ref)
-                if isinstance(model_ref, str) and model_ref.startswith("${model."):
-                    model_name = model_ref[8:-1]  # Remove ${model. and }
-                    logger.debug("Extracted model name: %s", model_name)
-                    if model_name not in self.models:
-                        raise ValueError(
-                            f"Model '{model_name}' referenced by agent '{agent_name}' not found"
-                        )
-                    agent_config["model"] = dict(self.models[model_name])
+                model_config = self._interpolate_value(model_ref)
+                if model_config:
+                    agent_config["model"] = model_config
+                else:
+                    raise ValueError(
+                        f"Model referenced by agent '{agent_name}' not found"
+                    )
 
             # Replace plugin references
             if "plugins" in agent_config:
@@ -138,31 +191,37 @@ class HCLConfigLoader:
                         plugin_ref,
                         type(plugin_ref),
                     )
-                    if isinstance(plugin_ref, str) and plugin_ref.startswith(
-                        "${plugin."
-                    ):
-                        plugin_name = plugin_ref[9:-1]  # Remove ${plugin. and }
-                        logger.debug("Extracted plugin name: %s", plugin_name)
-                        if plugin_name not in self.plugins:
-                            raise ValueError(
-                                f"Plugin '{plugin_name}' referenced by agent '{agent_name}' not found"
-                            )
-                        plugin_config = dict(self.plugins[plugin_name])
-                        logger.debug("Original plugin config: %s", plugin_config)
-                        # Keep only the necessary fields
-                        processed_plugin = {
-                            "source": plugin_config["source"],
-                            "variables": plugin_config.get("variables", {}),
-                        }
-                        if "version" in plugin_config:
-                            processed_plugin["version"] = plugin_config["version"]
-                        plugins.append(processed_plugin)
+                    plugin_config = self._interpolate_value(plugin_ref)
+                    if plugin_config:
+                        plugins.append(plugin_config)
                     else:
                         logger.debug(
                             "Unexpected plugin reference format: %s", plugin_ref
                         )
                 logger.debug("Final plugins list: %s", plugins)
                 agent_config["plugins"] = plugins
+
+            # Interpolate any other values in the agent config
+            for key, value in list(
+                agent_config.items()
+            ):  # Use list to avoid modifying during iteration
+                if key not in ["model", "plugins"]:
+                    if isinstance(value, str):
+                        # Handle ${var.name} syntax in strings
+                        while "${var." in value:
+                            start = value.find("${var.")
+                            end = value.find("}", start)
+                            if end == -1:
+                                break
+                            var_ref = value[start : end + 1]
+                            var_name = var_ref[6:-1]  # Remove ${var. and }
+                            var_value = self.variables.get(var_name)
+                            if var_value is not None:
+                                value = value.replace(var_ref, str(var_value))
+                        agent_config[key] = value
+                    else:
+                        agent_config[key] = self._interpolate_value(value)
+
         logger.debug("Processed agents: %s", self.agents)
 
     def load_config(self) -> Dict[str, Any]:
