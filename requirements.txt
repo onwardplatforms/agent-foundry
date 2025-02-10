@@ -3,3 +3,4 @@ semantic-kernel
 python-dotenv
 aiohttp
 jsonschema
+python-hcl2

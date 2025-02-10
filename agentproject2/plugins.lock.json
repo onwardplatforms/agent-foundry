@@ -1,0 +1,11 @@
+{
+  "plugins": [
+    {
+      "name": "agentruntime_plugin_echo",
+      "source": "github.com/onwardplatforms/agentruntime-plugin-echo",
+      "version": "v0.0.1",
+      "branch": null,
+      "sha": "598bf8e072ed923fe392d6c4f06588d213f43f86e64aa7274d2f96ddbf4cfde5"
+    }
+  ]
+}

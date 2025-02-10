@@ -74,8 +74,10 @@ class PluginConfig:
         """Check if source is a GitHub URL."""
         if not self.source:
             return False
-        return self.source.startswith("https://github.com/") or self.source.startswith(
-            "github.com/"
+        return (
+            self.source.startswith("https://github.com/")
+            or self.source.startswith("github.com/")
+            or ".com/" in self.source  # Consider any .com/ URL as remote
         )
 
     @property
