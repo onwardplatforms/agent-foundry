@@ -4,6 +4,7 @@ from typing import Dict, Any, List
 import hcl2
 from pathlib import Path
 from glob import glob
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -88,8 +89,33 @@ class HCLConfigLoader:
                             processed_plugin["version"] = plugin_config["version"]
                         return processed_plugin
                     return None
-            # Handle type.name syntax
+            # Handle type.name syntax and string interpolation
             elif "." in value:
+                # Try to find all ${type.name} patterns in the string
+                matches = list(re.finditer(r"\${(var|model|plugin)\.([^}]+)}", value))
+                if matches:
+                    result = value
+                    for match in matches:
+                        ref_type, ref_name = match.groups()
+                        if ref_type == "var":
+                            var_value = self.variables.get(ref_name)
+                            if var_value is not None:
+                                result = result.replace(match.group(0), str(var_value))
+                        elif ref_type == "model":
+                            model_config = self.models.get(ref_name)
+                            if model_config:
+                                result = result.replace(
+                                    match.group(0), model_config.get("name", "")
+                                )
+                        elif ref_type == "plugin":
+                            plugin_config = self.plugins.get(ref_name)
+                            if plugin_config:
+                                result = result.replace(
+                                    match.group(0), plugin_config.get("source", "")
+                                )
+                    return result
+
+                # Handle direct type.name references
                 ref_type, ref_name = value.split(".", 1)
                 if ref_type == "var":
                     # If this is a string that contains var.name, replace it with the value
@@ -202,25 +228,9 @@ class HCLConfigLoader:
                 agent_config["plugins"] = plugins
 
             # Interpolate any other values in the agent config
-            for key, value in list(
-                agent_config.items()
-            ):  # Use list to avoid modifying during iteration
+            for key, value in list(agent_config.items()):
                 if key not in ["model", "plugins"]:
-                    if isinstance(value, str):
-                        # Handle ${var.name} syntax in strings
-                        while "${var." in value:
-                            start = value.find("${var.")
-                            end = value.find("}", start)
-                            if end == -1:
-                                break
-                            var_ref = value[start : end + 1]
-                            var_name = var_ref[6:-1]  # Remove ${var. and }
-                            var_value = self.variables.get(var_name)
-                            if var_value is not None:
-                                value = value.replace(var_ref, str(var_value))
-                        agent_config[key] = value
-                    else:
-                        agent_config[key] = self._interpolate_value(value)
+                    agent_config[key] = self._interpolate_value(value)
 
         logger.debug("Processed agents: %s", self.agents)
 

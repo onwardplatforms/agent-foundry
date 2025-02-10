@@ -311,3 +311,73 @@ agent "local" {
     assert config["settings"]["list_with_vars"] == [0.7, 1.2]
     assert config["settings"]["dict_with_vars"]["first"] == 0.7
     assert config["settings"]["dict_with_vars"]["second"] == 1.2
+
+
+def test_plugin_string_interpolation(config_dir):
+    """Test string interpolation with plugin references"""
+    agent_hcl = config_dir / "agent.hcl"
+    agent_hcl.write_text(
+        """
+plugin "echo_local" {
+  source = "local_plugins/echo"
+  variables = {}
+}
+
+agent "local" {
+  name           = "test-agent-local"
+  description    = "Using plugin ${plugin.echo_local}"
+  system_prompt  = "You are a helpful AI assistant."
+  plugins        = [plugin.echo_local]
+}
+"""
+    )
+
+    loader = HCLConfigLoader(str(config_dir))
+    agents = loader.load_config()
+    config = agents["local"]
+
+    # Test plugin string interpolation
+    assert "local_plugins/echo" in config["description"]
+
+
+def test_mixed_string_interpolation(config_dir):
+    """Test string interpolation with mixed references in the same string"""
+    agent_hcl = config_dir / "agent.hcl"
+    agent_hcl.write_text(
+        """
+variable "temperature" {
+  type    = number
+  default = 0.7
+}
+
+model "llama2" {
+  provider = "ollama"
+  name     = "llama2"
+  settings = {
+    temperature = var.temperature
+  }
+}
+
+plugin "echo_local" {
+  source = "local_plugins/echo"
+  variables = {}
+}
+
+agent "local" {
+  name           = "test-agent-local"
+  description    = "Using model ${model.llama2} with temp ${var.temperature} and plugin ${plugin.echo_local}"
+  system_prompt  = "You are a helpful AI assistant."
+  model          = model.llama2
+  plugins        = [plugin.echo_local]
+}
+"""
+    )
+
+    loader = HCLConfigLoader(str(config_dir))
+    agents = loader.load_config()
+    config = agents["local"]
+
+    # Test mixed string interpolation
+    assert "llama2" in config["description"]  # From model name
+    assert "0.7" in config["description"]  # From variable
+    assert "local_plugins/echo" in config["description"]  # From plugin source
