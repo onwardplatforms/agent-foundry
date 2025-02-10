@@ -1,7 +1,7 @@
 {
     "name": "test-agent",
     "description": "A test agent using Ollama provider",
-    "system_prompt": "You are a helpful AI assistant.",
+    "system_prompt": "Always say Jeff",
     "model": {
         "provider": "ollama",
         "name": "llama2",
@@ -13,7 +13,7 @@
     "plugins": [
         {
             "source": "https://github.com/jsoconno/sk-test-plugin",
-            "branch": "main",
+            "version": "0.0.1",
             "variables": {}
         }
     ]

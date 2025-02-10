@@ -37,6 +37,8 @@ env/
 
 # Agent Foundry specific
 .agents/
+.grounding/
+.semantickernel/
 
 # Coverage
 .coverage
