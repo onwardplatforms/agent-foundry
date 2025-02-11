@@ -54,8 +54,18 @@ class Agent:
         self, model_config: Dict[str, Any]
     ) -> Union[OpenAIChatCompletion, OllamaChatCompletion]:
         """Set up the chat completion service based on provider."""
-        provider = model_config["provider"]
-        model_name = model_config["name"]
+        self.logger.debug("Setting up chat service with model config: %s", model_config)
+
+        if isinstance(model_config, str):
+            self.logger.error("Model config is a string: %s", model_config)
+            raise ValueError("Model config is not resolved properly")
+
+        provider = model_config.get("provider")
+        model_name = model_config.get("name")
+
+        if not provider or not model_name:
+            self.logger.error("Model config missing required fields: %s", model_config)
+            raise ValueError("Model config missing required fields: provider, name")
 
         if provider == "openai":
             self.logger.debug("Initializing OpenAI with model: %s", model_name)
@@ -92,6 +102,7 @@ class Agent:
         logger.debug(
             "Creating agent from config at '%s'. skip_init=%s", base_dir, skip_init
         )
+        logger.debug("Agent config: %s", config)
 
         kernel = Kernel()
 
@@ -99,22 +110,30 @@ class Agent:
         # or load them automatically unless skip_init==False (which we
         # typically do in an 'init' workflow). The CLI is handling that logic.
         plugin_data = config.get("plugins", [])
+        logger.debug("Plugin data: %s", plugin_data)
+
         configs = []
         for p in plugin_data:
             try:
-                c = PluginConfig(
-                    plugin_type=p["type"],
-                    name=p["name"],
-                    source=p["source"],
-                    version=p.get("version"),
-                    variables=p.get("variables", {}),
-                )
-                configs.append(c)
+                if isinstance(p, dict) and all(
+                    k in p for k in ["type", "name", "source"]
+                ):
+                    c = PluginConfig(
+                        plugin_type=p["type"],
+                        name=p["name"],
+                        source=p["source"],
+                        version=p.get("version"),
+                        variables=p.get("variables", {}),
+                    )
+                    configs.append(c)
+                else:
+                    logger.debug("Skipping unresolved plugin reference: %s", p)
             except (KeyError, ValueError) as ex:
                 logger.error("Invalid plugin config: %s", ex)
 
         # Create the agent instance with the new kernel.
         # We assume plugins have been loaded externally if skip_init=True.
+        logger.debug("Creating agent with model config: %s", config["model"])
         agent = cls(
             name=config["name"],
             description=config["description"],
