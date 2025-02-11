@@ -14,6 +14,7 @@ from agent_runtime.core import (
     init_plugins,
     run_agent_interactive,
 )
+from agent_runtime.cli.output import Style
 
 # Load environment from .env
 load_dotenv()
@@ -25,6 +26,7 @@ def set_debug_logging(debug: bool) -> None:
     """Set debug logging level."""
     import sys
 
+    # Configure root logger
     root_logger = logging.getLogger()
     handler = logging.StreamHandler(sys.stdout)
     formatter = logging.Formatter("%(name)s - %(levelname)s - %(message)s")
@@ -32,13 +34,20 @@ def set_debug_logging(debug: bool) -> None:
     root_logger.addHandler(handler)
     root_logger.setLevel(logging.DEBUG if debug else logging.INFO)
 
+    # Configure specific loggers
     if debug:
         logging.getLogger("agent_runtime").setLevel(logging.DEBUG)
         logging.getLogger(__name__).setLevel(logging.DEBUG)
-        click.echo("Debug mode enabled - logging=DEBUG")
+        logging.getLogger("httpx").setLevel(
+            logging.INFO
+        )  # Show HTTP requests in debug mode
+        click.echo(Style.info("Debug mode enabled - logging=DEBUG"))
     else:
         logging.getLogger("agent_runtime").setLevel(logging.INFO)
         logging.getLogger(__name__).setLevel(logging.INFO)
+        logging.getLogger("httpx").setLevel(
+            logging.WARNING
+        )  # Hide HTTP requests in normal mode
 
 
 @click.group()
@@ -61,10 +70,11 @@ def validate(dir: Path) -> None:
     logger.debug("Validating config in directory: %s", dir)
 
     try:
+        click.echo(Style.header("Validating configuration..."))
         validate_configs_headless(dir)
-        click.echo("Configuration is valid.")
+        click.echo(Style.success("Configuration is valid."))
     except Exception as e:
-        click.echo(f"Configuration validation failed: {e}")
+        click.echo(Style.error(f"Configuration validation failed: {e}"))
         raise SystemExit(1)
 
 
@@ -84,10 +94,11 @@ def init(dir: Path, agent: Optional[str] = None) -> None:
     """Initialize agents by installing plugins and updating the lockfile."""
     logger.debug("Initializing agents from directory: %s (agent=%s)", dir, agent)
     try:
+        click.echo(Style.header("Initializing agent configuration..."))
         init_plugins(dir, agent)
     except Exception as e:
         logger.exception("Failed to init plugins.")
-        click.echo(f"Failed to init plugins: {e}")
+        click.echo(Style.error(f"Failed to init plugins: {e}"))
         raise SystemExit(1)
 
 
@@ -108,10 +119,11 @@ def run(dir: Path, agent: Optional[str]) -> None:
     logger.debug("Running agent from directory: %s (agent=%s)", dir, agent)
 
     try:
+        click.echo(Style.header("Starting agent..."))
         run_agent_interactive(dir, agent)
     except Exception as e:
         logger.exception("Error running agent.")
-        click.echo(str(e))
+        click.echo(Style.error(str(e)))
         raise SystemExit(1)
 
 

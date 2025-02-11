@@ -48,7 +48,7 @@ class Agent:
         # Store config
         self.model_config = model_config
         self.plugins_dir = plugins_dir
-        self.logger.info("Agent '%s' initialized.", self.name)
+        self.logger.debug("Agent '%s' initialized.", self.name)
 
     def _setup_chat_service(
         self, model_config: Dict[str, Any]

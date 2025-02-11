@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, cast
 
 import requests
 from semantic_kernel import Kernel
+import click
+from agent_runtime.cli.output import Style
 
 
 # ANSI color codes for terminal output
@@ -357,15 +359,12 @@ class PluginManager:
                                 locked_sha == current_sha
                                 and plugin.get("version") == cfg.version
                             ):
-                                cli_message(
-                                    f"  • Plugin {cfg.name} is up to date", Colors.GREEN
-                                )
+                                click.echo(Style.plugin_status(cfg.name, "up to date"))
                                 self._set_plugin_vars(cfg)
                                 return
                             else:
-                                cli_message(
-                                    f"  • Plugin {cfg.name} has changed, downloading new version",
-                                    Colors.YELLOW,
+                                click.echo(
+                                    Style.plugin_status(cfg.name, "updating", "yellow")
                                 )
                                 break
 
@@ -397,15 +396,12 @@ class PluginManager:
                         )
 
                         if locked_sha == current_sha:
-                            cli_message(
-                                f"  • Plugin {cfg.name} has not changed", Colors.GREEN
-                            )
+                            click.echo(Style.plugin_status(cfg.name, "up to date"))
                             self._set_plugin_vars(cfg)
                             return
                         else:
-                            cli_message(
-                                f"  • Plugin {cfg.name} has changed, using latest version",
-                                Colors.YELLOW,
+                            click.echo(
+                                Style.plugin_status(cfg.name, "updating", "yellow")
                             )
 
             # Add source directory's parent to sys.path if not already there

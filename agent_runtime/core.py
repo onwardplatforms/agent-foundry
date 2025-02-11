@@ -3,12 +3,14 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List, AsyncIterator
 
+import click
 from semantic_kernel import Kernel
 
 from agent_runtime.config.hcl_loader import HCLConfigLoader
 from agent_runtime.plugins.manager import PluginManager, PluginConfig
 from agent_runtime.agent import Agent
 from agent_runtime.validation import validate_agent_config
+from agent_runtime.cli.output import Style
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +108,7 @@ def init_plugins(config_dir: Path, agent_name: Optional[str] = None) -> None:
     plugin_list = collect_plugins_for_agents(agent_configs, agent_name)
 
     if not plugin_list:
-        logger.info("No plugins found. Nothing to do.")
+        click.echo(Style.info("No plugins found. Nothing to do."))
         return
 
     kernel = Kernel()
@@ -118,18 +120,18 @@ def init_plugins(config_dir: Path, agent_name: Optional[str] = None) -> None:
         pm.plugin_configs[pc.scoped_name] = pc
 
     if pm.compare_with_lock(plugin_list):
-        print("All plugins are up to date.")
+        click.echo(Style.success("All plugins are up to date."))
         # Load from local cache
         for cfg_item in plugin_list:
             git_ref = cfg_item.git_ref if cfg_item.is_github_source else None
             pm.load_plugin(cfg_item.scoped_name, git_ref)
-        print("All plugins loaded from local cache.")
+        click.echo(Style.success("All plugins loaded from local cache."))
         return
 
     # Otherwise, install
-    print("Installing plugins...")
+    click.echo(Style.header("Installing plugins..."))
     pm.install_and_load_plugins(plugin_list, force_reinstall=False)
-    print("Plugins installed successfully; lockfile updated.")
+    click.echo(Style.success("Plugins installed successfully; lockfile updated."))
 
 
 def run_agent_interactive(config_dir: Path, agent_name: Optional[str] = None) -> None:
@@ -183,9 +185,9 @@ def run_agent_interactive(config_dir: Path, agent_name: Optional[str] = None) ->
     agent = Agent.from_config(agent_cfg, base_dir=config_dir, skip_init=True)
     agent.kernel = kernel
 
-    print(f"Agent '{agent_cfg['name']}' is ready.")
-    print("Type 'exit' or 'quit' to end the session.")
-    print("----------")
+    click.echo(Style.success(f"Agent '{agent_cfg['name']}' is ready."))
+    click.echo(Style.info("Type 'exit' or 'quit' to end the session."))
+    click.echo("----------")
 
     # Start the interactive chat loop
     import asyncio
@@ -193,7 +195,7 @@ def run_agent_interactive(config_dir: Path, agent_name: Optional[str] = None) ->
     async def _interactive():
         while True:
             try:
-                msg = input("You > ")
+                msg = input("\nYou > ")
             except EOFError:
                 break
             if msg.lower() in ["exit", "quit"]:
@@ -204,7 +206,7 @@ def run_agent_interactive(config_dir: Path, agent_name: Optional[str] = None) ->
                     print(chunk.content, end="", flush=True)
             except Exception as e:
                 logger.exception("Error in chat session.")
-                print(f"[Error: {e}]")
+                print(Style.error(f"[Error: {e}]"))
             print("\n")
 
     asyncio.run(_interactive())
@@ -218,4 +220,3 @@ def validate_configs_headless(config_dir: Path) -> None:
     # If you had a JSON schema or other checks, you could expand it here.
     load_and_validate_config(config_dir)
     # (Optional) do more checks or a separate schema validate
-    print("Configuration is valid.")
