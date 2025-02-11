@@ -37,25 +37,39 @@ class HCLConfigLoader:
                 continue
 
             for block in blocks:
-                if not isinstance(block, dict) or len(block) != 1:
+                if not isinstance(block, dict):
                     logger.debug("Skipping invalid block: %s", block)
                     continue
-
-                block_name, block_value = next(iter(block.items()))
-                logger.debug(
-                    "Processing block '%s.%s': %s", block_type, block_name, block_value
-                )
 
                 if block_type == "runtime":
                     # Store the entire runtime block
                     self.runtime = block
                 elif block_type == "variable":
+                    block_name, block_value = next(iter(block.items()))
                     self.variables[block_name] = block_value
                 elif block_type == "model":
+                    block_name, block_value = next(iter(block.items()))
                     self.models[block_name] = block_value
                 elif block_type == "plugin":
-                    self.plugins[block_name] = block_value
+                    # Handle dual identifiers for plugins
+                    if len(block) != 1:
+                        logger.debug("Skipping invalid plugin block: %s", block)
+                        continue
+                    plugin_type, inner_block = next(iter(block.items()))
+                    if not isinstance(inner_block, dict) or len(inner_block) != 1:
+                        logger.debug(
+                            "Skipping invalid plugin inner block: %s", inner_block
+                        )
+                        continue
+                    plugin_name, plugin_value = next(iter(inner_block.items()))
+                    # Store with combined key
+                    self.plugins[f"{plugin_type}:{plugin_name}"] = {
+                        "type": plugin_type,
+                        "name": plugin_name,
+                        **plugin_value,
+                    }
                 elif block_type == "agent":
+                    block_name, block_value = next(iter(block.items()))
                     self.agents[block_name] = block_value
 
     def _process_variables(self):
@@ -69,17 +83,27 @@ class HCLConfigLoader:
 
     def _interpolate_value(self, value: Any) -> Any:
         """Interpolate a value, replacing any variable, model, or plugin references."""
+        logger.debug("Interpolating value: %s (type: %s)", value, type(value))
         if isinstance(value, str):
             # Handle ${type.name} syntax
             if value.startswith("${") and value.endswith("}"):
                 ref = value[2:-1]  # Remove ${ and }
-                ref_type, ref_name = ref.split(".", 1)
+                parts = ref.split(".")
+                logger.debug("Interpolating ${} reference parts: %s", parts)
+                if len(parts) < 2:
+                    return value
+                ref_type = parts[0]
                 if ref_type == "var":
-                    return self.variables.get(ref_name)
+                    return self.variables.get(parts[1])
                 elif ref_type == "model":
-                    return dict(self.models.get(ref_name, {}))
+                    return dict(self.models.get(parts[1], {}))
                 elif ref_type == "plugin":
-                    plugin_config = dict(self.plugins.get(ref_name, {}))
+                    if len(parts) != 3:  # Should be plugin.type.name
+                        logger.debug("Invalid plugin reference parts: %s", parts)
+                        return None
+                    plugin_key = f"{parts[1]}:{parts[2]}"  # Reconstruct the plugin key
+                    logger.debug("Looking up plugin with key: %s", plugin_key)
+                    plugin_config = dict(self.plugins.get(plugin_key, {}))
                     if plugin_config:
                         processed_plugin = {
                             "source": plugin_config["source"],
@@ -87,6 +111,7 @@ class HCLConfigLoader:
                         }
                         if "version" in plugin_config:
                             processed_plugin["version"] = plugin_config["version"]
+                        logger.debug("Processed plugin config: %s", processed_plugin)
                         return processed_plugin
                     return None
             # Handle type.name syntax and string interpolation
@@ -116,30 +141,39 @@ class HCLConfigLoader:
                     return result
 
                 # Handle direct type.name references
-                ref_type, ref_name = value.split(".", 1)
+                parts = value.split(".")
+                logger.debug("Direct reference parts: %s", parts)
+                if len(parts) < 2:
+                    return value
+                ref_type = parts[0]
                 if ref_type == "var":
                     # If this is a string that contains var.name, replace it with the value
-                    if value == f"var.{ref_name}":
-                        return self.variables.get(ref_name)
+                    if value == f"var.{parts[1]}":
+                        return self.variables.get(parts[1])
                     # Otherwise, do string interpolation
-                    var_value = self.variables.get(ref_name)
+                    var_value = self.variables.get(parts[1])
                     if var_value is not None:
-                        return value.replace(f"var.{ref_name}", str(var_value))
+                        return value.replace(f"var.{parts[1]}", str(var_value))
                 elif ref_type == "model":
-                    if value == f"model.{ref_name}":
-                        return dict(self.models.get(ref_name, {}))
+                    if value == f"model.{parts[1]}":
+                        return dict(self.models.get(parts[1], {}))
                 elif ref_type == "plugin":
-                    if value == f"plugin.{ref_name}":
-                        plugin_config = dict(self.plugins.get(ref_name, {}))
-                        if plugin_config:
-                            processed_plugin = {
-                                "source": plugin_config["source"],
-                                "variables": plugin_config.get("variables", {}),
-                            }
-                            if "version" in plugin_config:
-                                processed_plugin["version"] = plugin_config["version"]
-                            return processed_plugin
+                    if len(parts) != 3:  # Should be plugin.type.name
+                        logger.debug("Invalid plugin reference parts: %s", parts)
                         return None
+                    plugin_key = f"{parts[1]}:{parts[2]}"  # Reconstruct the plugin key
+                    logger.debug("Looking up plugin with key: %s", plugin_key)
+                    plugin_config = dict(self.plugins.get(plugin_key, {}))
+                    if plugin_config:
+                        processed_plugin = {
+                            "source": plugin_config["source"],
+                            "variables": plugin_config.get("variables", {}),
+                        }
+                        if "version" in plugin_config:
+                            processed_plugin["version"] = plugin_config["version"]
+                        logger.debug("Processed plugin config: %s", processed_plugin)
+                        return processed_plugin
+                    return None
         elif isinstance(value, dict):
             return {k: self._interpolate_value(v) for k, v in value.items()}
         elif isinstance(value, list):
@@ -160,30 +194,43 @@ class HCLConfigLoader:
     def _process_plugins(self):
         """Process and validate all plugins after merging configurations"""
         logger.debug("Processing plugins: %s", self.plugins)
-        for plugin_name, plugin_config in self.plugins.items():
+        for plugin_key, plugin_config in self.plugins.items():
             # Validate plugin configuration
             if "source" not in plugin_config:
                 raise ValueError(
-                    f"Plugin {plugin_name} is missing required 'source' field"
+                    f"Plugin {plugin_key} is missing required 'source' field"
                 )
 
-            # For local plugins, source should be a directory path
-            if plugin_name.endswith("_local"):
-                plugin_config["source"] = plugin_config["source"]
-                # Extract name from directory path
-                plugin_config["name"] = os.path.basename(plugin_config["source"])
-            else:
-                # Remote plugins require version
+            plugin_type = plugin_config["type"]
+            plugin_name = plugin_config["name"]
+
+            # Validate based on plugin type
+            if plugin_type == "local":
+                if "version" in plugin_config:
+                    raise ValueError(
+                        f"Local plugin {plugin_name} cannot specify a version"
+                    )
+                if not (
+                    plugin_config["source"].startswith("./")
+                    or plugin_config["source"].startswith("../")
+                ):
+                    raise ValueError(
+                        f"Local plugin {plugin_name} source must start with ./ or ../"
+                    )
+            elif plugin_type == "remote":
                 if "version" not in plugin_config:
                     raise ValueError(
                         f"Remote plugin {plugin_name} is missing required 'version' field"
                     )
-                plugin_config["name"] = plugin_name.replace("_remote", "")
+            else:
+                raise ValueError(
+                    f"Invalid plugin type '{plugin_type}' for plugin {plugin_name}"
+                )
 
             # Add plugin name to variables for reference
             if "variables" not in plugin_config:
                 plugin_config["variables"] = {}
-            plugin_config["variables"]["name"] = plugin_config["name"]
+            plugin_config["variables"]["name"] = plugin_name
 
         logger.debug("Processed plugins: %s", self.plugins)
 
@@ -217,12 +264,44 @@ class HCLConfigLoader:
                         plugin_ref,
                         type(plugin_ref),
                     )
-                    plugin_config = self._interpolate_value(plugin_ref)
-                    if plugin_config:
-                        plugins.append(plugin_config)
+                    # Handle both direct and interpolated references
+                    if isinstance(plugin_ref, str):
+                        # Remove ${} if present
+                        if plugin_ref.startswith("${") and plugin_ref.endswith("}"):
+                            plugin_ref = plugin_ref[2:-1]
+
+                        # Extract type and name from reference
+                        parts = plugin_ref.split(".")
+                        if len(parts) == 3 and parts[0] == "plugin":
+                            plugin_type = parts[1]
+                            plugin_name = parts[2]
+                            plugin_key = f"{plugin_type}:{plugin_name}"
+                            logger.debug("Looking up plugin with key: %s", plugin_key)
+                            plugin_config = dict(self.plugins.get(plugin_key, {}))
+                            if plugin_config:
+                                processed_plugin = {
+                                    "type": plugin_type,
+                                    "name": plugin_name,
+                                    "source": plugin_config["source"],
+                                    "variables": plugin_config.get("variables", {}),
+                                }
+                                if "version" in plugin_config:
+                                    processed_plugin["version"] = plugin_config[
+                                        "version"
+                                    ]
+                                logger.debug(
+                                    "Processed plugin config: %s", processed_plugin
+                                )
+                                plugins.append(processed_plugin)
+                            else:
+                                logger.debug("Plugin not found for key: %s", plugin_key)
+                        else:
+                            logger.debug(
+                                "Invalid plugin reference format: %s", plugin_ref
+                            )
                     else:
                         logger.debug(
-                            "Unexpected plugin reference format: %s", plugin_ref
+                            "Unexpected plugin reference type: %s", type(plugin_ref)
                         )
                 logger.debug("Final plugins list: %s", plugins)
                 agent_config["plugins"] = plugins

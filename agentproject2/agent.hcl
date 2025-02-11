@@ -23,29 +23,29 @@ model "llama2_instance" {
   }
 }
 
-plugin "echo_local" {
-  source = "local_plugins/echo"
+plugin "local" "echo" {
+  source = "./local_plugins/echo"
   variables = {}
 }
 
-plugin "echo_remote" {
-  source = "github.com/onwardplatforms/agentruntime-plugin-echo"
-  version = "v0.0.1"
+plugin "remote" "echo" {
+  source = "onwardplatforms/echo"
+  version = "0.0.1"
   variables = {}
 }
 
-# agent "local" {
-#   name           = "test-agent-local"
-#   description    = "A test agent using Ollama provider (Local Development)"
-#   system_prompt  = "You are a helpful AI assistant."
-#   model          = model.llama2_instance
-#   plugins        = [plugin.echo_local]
-# }
+agent "local" {
+  name           = "test-agent-local"
+  description    = "A test agent using Ollama provider (Local Development)"
+  system_prompt  = "You are a helpful AI assistant."
+  model          = model.llama2_instance
+  plugins        = [plugin.local.echo]
+}
 
 agent "remote" {
   name           = "test-agent"
   description    = "A test agent using Ollama provider"
   system_prompt  = "Always say Jeff"
   model          = model.llama2_instance
-  plugins        = [plugin.echo_remote]
+  plugins        = [plugin.remote.echo]
 }

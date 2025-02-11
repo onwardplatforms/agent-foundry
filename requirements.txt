@@ -4,3 +4,4 @@ python-dotenv
 aiohttp
 jsonschema
 python-hcl2
+requests

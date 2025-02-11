@@ -1,11 +1,19 @@
 {
   "plugins": [
     {
-      "name": "agentruntime_plugin_echo",
-      "source": "github.com/onwardplatforms/agentruntime-plugin-echo",
-      "version": "v0.0.1",
-      "branch": null,
-      "sha": "e3fe84764a3a1e34e2bfe6bf515da7c182efc4b0e99b1b629b94ed44bf607925"
+      "name": "echo",
+      "scoped_name": "@local/echo",
+      "source": "./local_plugins/echo",
+      "type": "local",
+      "sha": "ab677f227269304b80bf57ef35bd775d5c133d2d001288fb26917e783bec0f06"
+    },
+    {
+      "name": "echo",
+      "scoped_name": "@onwardplatforms/echo",
+      "source": "onwardplatforms/echo",
+      "type": "remote",
+      "version": "0.0.1",
+      "commit_sha": "a9d0f45323eb3acc8aa05552e8e724362257bfda"
     }
   ]
 }

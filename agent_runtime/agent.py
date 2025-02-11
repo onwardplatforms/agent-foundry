@@ -103,9 +103,10 @@ class Agent:
         for p in plugin_data:
             try:
                 c = PluginConfig(
+                    plugin_type=p["type"],
+                    name=p["name"],
                     source=p["source"],
                     version=p.get("version"),
-                    branch=p.get("branch"),
                     variables=p.get("variables", {}),
                 )
                 configs.append(c)

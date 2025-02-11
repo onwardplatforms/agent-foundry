@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Dict, cast
+from typing import Any, Callable, Coroutine, Dict, cast, Optional
 
 import click
 from dotenv import load_dotenv
@@ -86,7 +86,12 @@ def validate(dir: Path) -> None:
     type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
     default=".",
 )
-def init(dir: Path) -> None:
+@click.option(
+    "--agent",
+    type=str,
+    help="Name of the agent to initialize (if not specified, all agents will be initialized)",
+)
+def init(dir: Path, agent: Optional[str] = None) -> None:
     """Initialize agents by installing plugins and updating the lockfile."""
     logger.debug("Initializing agents from directory: %s", dir)
 
@@ -100,11 +105,24 @@ def init(dir: Path) -> None:
         click.echo(f"Failed to load configuration: {e}")
         exit(1)
 
-    lockfile = dir / LOCKFILE_NAME
+    # If agent is specified, only process that agent
+    if agent:
+        if agent not in cfg:
+            click.echo(f"Agent '{agent}' not found in configuration")
+            exit(1)
+        agents_to_process = {agent: cfg[agent]}
+    else:
+        agents_to_process = cfg
 
-    # Process all agents
-    for agent_name, agent_cfg in cfg.items():
-        plugin_list = []
+    # Create a single plugin manager for all agents
+    from semantic_kernel import Kernel
+
+    kernel = Kernel()
+    pm = PluginManager(dir, kernel)
+
+    # Collect all plugins from all agents
+    all_plugins = []
+    for agent_name, agent_cfg in agents_to_process.items():
         logger.debug("Processing agent configuration: %s", agent_cfg)
         plugins = agent_cfg.get("plugins", [])
         logger.debug("Found plugins in agent config: %s", plugins)
@@ -127,51 +145,54 @@ def init(dir: Path) -> None:
                     logger.debug("Plugin config missing 'source' field")
                     continue
 
+                if "type" not in plugin:
+                    logger.debug("Plugin config missing 'type' field")
+                    continue
+
+                if "name" not in plugin:
+                    logger.debug("Plugin config missing 'name' field")
+                    continue
+
                 pc = PluginConfig(
+                    plugin_type=plugin["type"],
+                    name=plugin["name"],
                     source=plugin["source"],
                     version=plugin.get("version"),
-                    branch=None,
                     variables=plugin.get("variables", {}),
                 )
                 logger.debug("Created plugin config: %s", pc)
-                plugin_list.append(pc)
+                all_plugins.append(pc)
             except (KeyError, ValueError) as ex:
                 logger.exception("Error processing plugin config")
                 click.echo(f"Invalid plugin config in agent '{agent_name}': {ex}")
                 exit(1)
 
-        if not plugin_list:
-            logger.debug("No valid plugins found after processing")
-            click.echo(f"No plugins found for agent '{agent_name}'. Skipping.")
-            continue
+    if not all_plugins:
+        logger.debug("No valid plugins found after processing")
+        click.echo("No plugins found in any agent. Nothing to do.")
+        return
 
-        from semantic_kernel import Kernel
+    # Store plugin configs
+    for cfg_item in all_plugins:
+        pm.plugin_configs[cfg_item.scoped_name] = cfg_item
 
-        kernel = Kernel()
-        pm = PluginManager(kernel, dir)
+    # Compare with existing lockfile
+    if pm.compare_with_lock(all_plugins):
+        click.echo("All plugins are up to date.")
+        for cfg_item in all_plugins:
+            git_ref = cfg_item.git_ref if cfg_item.is_github_source else None
+            pm.load_plugin(cfg_item.scoped_name, git_ref)
+        click.echo("All plugins loaded from local cache.")
+        return
 
-        # Compare with existing lockfile
-        old_lock_data = pm.read_lockfile(lockfile)
-        if pm.compare_with_lock(plugin_list, old_lock_data):
-            click.echo(f"Plugins for agent '{agent_name}' are up to date.")
-            for cfg_item in plugin_list:
-                git_ref = cfg_item.git_ref if cfg_item.is_github_source else None
-                pm.load_plugin(cfg_item.name, git_ref)
-            click.echo("All plugins loaded from local cache.")
-            continue
-
-        click.echo(f"Installing plugins for agent '{agent_name}'...")
-        try:
-            pm.install_and_load_plugins(
-                plugin_list, lockfile=lockfile, force_reinstall=False
-            )
-            click.echo(
-                f"Plugins installed successfully, lockfile updated: {LOCKFILE_NAME}"
-            )
-        except Exception as e:
-            logger.exception("Error installing plugins")
-            click.echo(f"Failed to init plugins: {e}")
-            exit(1)
+    click.echo("Installing plugins...")
+    try:
+        pm.install_and_load_plugins(all_plugins, force_reinstall=False)
+        click.echo(f"Plugins installed successfully, lockfile updated: {LOCKFILE_NAME}")
+    except Exception as e:
+        logger.exception("Error installing plugins")
+        click.echo(f"Failed to init plugins: {e}")
+        exit(1)
 
 
 def async_command(func: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[..., Any]:
@@ -256,11 +277,16 @@ def run(dir: Path, agent: str) -> None:
         try:
             logger.debug("Processing plugin config: %s", plugin)
             pc = PluginConfig(
+                plugin_type=plugin["type"],
+                name=plugin["name"],
                 source=plugin["source"],
                 version=plugin.get("version"),
-                branch=None,
                 variables=plugin.get("variables", {}),
             )
+            # Check for duplicate scoped names
+            if any(p.scoped_name == pc.scoped_name for p in plugin_list):
+                click.echo(f"Duplicate plugin name: {pc.scoped_name}")
+                exit(1)
             plugin_list.append(pc)
         except (KeyError, ValueError) as ex:
             click.echo(f"Invalid plugin config: {ex}")
@@ -269,27 +295,33 @@ def run(dir: Path, agent: str) -> None:
     from semantic_kernel import Kernel
 
     kernel = Kernel()
-    pm = PluginManager(kernel, dir)
+    pm = PluginManager(dir, kernel)
 
-    # Check lockfile
-    if not lockfile.exists():
-        click.echo("No lockfile found. Please run 'init' first.")
-        exit(1)
+    # Store plugin configs in the manager using scoped names
+    for pc in plugin_list:
+        pm.plugin_configs[pc.scoped_name] = pc
 
-    lock_data = pm.read_lockfile(lockfile)
-    if not pm.compare_with_lock(plugin_list, lock_data):
-        click.echo("Your plugin configuration has changed since last init.")
-        click.echo("Please run 'init' again to update.")
-        exit(1)
+    # Check lockfile only if we have GitHub plugins
+    github_plugins = [p for p in plugin_list if p.is_github_source]
+    if github_plugins:
+        if not lockfile.exists():
+            click.echo("No lockfile found. Please run 'init' first.")
+            exit(1)
+
+        lock_data = pm.read_lockfile(lockfile)
+        if not pm.compare_with_lock(plugin_list, lock_data):
+            click.echo("Your plugin configuration has changed since last init.")
+            click.echo("Please run 'init' again to update.")
+            exit(1)
 
     # Load plugins
     for cfg_item in plugin_list:
         try:
             git_ref = cfg_item.git_ref if cfg_item.is_github_source else None
-            pm.load_plugin(cfg_item.name, git_ref)
+            pm.load_plugin(cfg_item.scoped_name, git_ref)
         except Exception as e:
-            logger.exception("Failed to load plugin '%s'.", cfg_item.name)
-            click.echo(f"Plugin load failure for '{cfg_item.name}': {e}")
+            logger.exception("Failed to load plugin '%s'.", cfg_item.scoped_name)
+            click.echo(f"Plugin load failure for '{cfg_item.scoped_name}': {e}")
             exit(1)
 
     # Create agent
