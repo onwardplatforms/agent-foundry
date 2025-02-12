@@ -3,15 +3,15 @@ runtime {
 }
 
 variable "model_temperature" {
-  description = "Temperature setting for the model"
-  type        = number
-  default     = 0.7
+  type = "number"
+  description = "Temperature setting for the model (0.0 to 1.0)"
+  default = 0.7
 }
 
 variable "model_max_tokens" {
-  description = "Maximum tokens for model response"
-  type        = number
-  default     = 1000
+  type = "number"
+  description = "Maximum number of tokens for model responses"
+  default = 1000
 }
 
 variable "signature" {
@@ -21,9 +21,30 @@ variable "signature" {
 }
 
 variable "provider" {
-  description = "Provider to use for the model"
-  type = string
+  type = "string"
+  description = "Model provider to use (e.g. ollama, openai)"
   default = "ollama"
+}
+
+variable "debug_mode" {
+  type = "bool"
+  description = "Enable debug logging"
+  default = false
+}
+
+variable "allowed_models" {
+  type = "list"
+  description = "List of allowed model names"
+  default = ["llama2", "mistral", "codellama"]
+}
+
+variable "model_settings" {
+  type = "map"
+  description = "Additional model settings"
+  default = {
+    context_window = 4096
+    top_p = 0.9
+  }
 }
 
 model "llama2_instance" {

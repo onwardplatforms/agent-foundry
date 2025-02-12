@@ -3,14 +3,30 @@
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union, List
 import hcl2
+import click
 
 logger = logging.getLogger(__name__)
 
 
+class ValidationError(Exception):
+    """Raised when variable validation fails."""
+
+    pass
+
+
 class VarLoader:
     """Handles loading and resolving variables from multiple sources."""
+
+    # Mapping of HCL types to Python types
+    TYPE_MAP = {
+        "string": str,
+        "number": (int, float),
+        "bool": bool,
+        "list": list,
+        "map": dict,
+    }
 
     def __init__(self):
         self.var_files: Dict[str, Dict[str, Any]] = {}
@@ -66,6 +82,66 @@ class VarLoader:
                 var_name = key[len(prefix) :].lower()
                 self.env_vars[var_name] = value
 
+    def _validate_type(self, value: Any, expected_type: str, var_name: str) -> Any:
+        """Validate and convert a value to its expected type."""
+        if expected_type not in self.TYPE_MAP:
+            raise ValidationError(
+                f"Unknown type '{expected_type}' for variable '{var_name}'"
+            )
+
+        expected_python_type = self.TYPE_MAP[expected_type]
+
+        # Handle special case for number type (can be int or float)
+        if expected_type == "number":
+            if not isinstance(value, (int, float)):
+                try:
+                    # Try to convert string to number
+                    if isinstance(value, str):
+                        if "." in value:
+                            value = float(value)
+                        else:
+                            value = int(value)
+                except ValueError:
+                    raise ValidationError(
+                        f"Variable '{var_name}' must be a number, got '{value}' ({type(value).__name__})"
+                    )
+        # Handle other types
+        elif not isinstance(value, expected_python_type):
+            try:
+                if expected_type == "bool" and isinstance(value, str):
+                    if value.lower() == "true":
+                        value = True
+                    elif value.lower() == "false":
+                        value = False
+                    else:
+                        raise ValueError()
+                else:
+                    value = expected_python_type(value)
+            except (ValueError, TypeError):
+                raise ValidationError(
+                    f"Variable '{var_name}' must be type {expected_type}, got '{value}' ({type(value).__name__})"
+                )
+
+        return value
+
+    def _prompt_for_value(self, var_name: str, var_def: Dict[str, Any]) -> Any:
+        """Prompt user for a variable value with proper type conversion."""
+        var_type = var_def.get("type", "string")
+        description = var_def.get("description", "")
+        prompt_text = f"\nVariable '{var_name}' is required"
+        if description:
+            prompt_text += f" - {description}"
+        prompt_text += f" (type: {var_type}): "
+
+        while True:
+            try:
+                value = click.prompt(prompt_text, type=str)
+                # Validate and convert the value
+                return self._validate_type(value, var_type, var_name)
+            except ValidationError as e:
+                click.echo(click.style(f"Error: {str(e)}", fg="red"))
+                continue
+
     def get_final_values(
         self, variables_def: Dict[str, Dict[str, Any]], prompt_missing: bool = True
     ) -> Dict[str, Any]:
@@ -78,35 +154,52 @@ class VarLoader:
         5. Interactive prompt if prompt_missing=True
         """
         final_vars: Dict[str, Any] = {}
-
-        # Track which variables still need values for potential prompting
-        missing_vars = []
+        validation_errors: List[str] = []
 
         for var_name, var_def in variables_def.items():
+            var_type = var_def.get("type", "string")
+            value = None
+
             # Resolution order
             if var_name in self.cli_vars:
-                final_vars[var_name] = self.cli_vars[var_name]
+                value = self.cli_vars[var_name]
             else:
                 # Check all var files in order they were provided
-                found = False
                 for vars in self.var_files.values():
                     if var_name in vars:
-                        final_vars[var_name] = vars[var_name]
-                        found = True
+                        value = vars[var_name]
                         break
 
-                if not found:
+                if value is None:
                     if var_name in self.env_vars:
-                        final_vars[var_name] = self.env_vars[var_name]
+                        value = self.env_vars[var_name]
                     elif "default" in var_def:
-                        final_vars[var_name] = var_def["default"]
-                    else:
-                        missing_vars.append((var_name, var_def))
+                        value = var_def["default"]
 
-        if missing_vars and prompt_missing:
-            # We'll implement interactive prompting in the next step
-            # For now, raise an error
-            names = [name for name, _ in missing_vars]
-            raise ValueError(f"Missing required variables: {', '.join(names)}")
+            # If we have a value, validate its type
+            if value is not None:
+                try:
+                    value = self._validate_type(value, var_type, var_name)
+                except ValidationError as e:
+                    validation_errors.append(str(e))
+                    value = None
+
+            # If still no value and prompting is enabled
+            if value is None and prompt_missing:
+                try:
+                    value = self._prompt_for_value(var_name, var_def)
+                except click.Abort:
+                    raise RuntimeError("Variable input aborted by user")
+
+            # If we still have no value, it's an error
+            if value is None:
+                validation_errors.append(
+                    f"No value provided for required variable '{var_name}'"
+                )
+            else:
+                final_vars[var_name] = value
+
+        if validation_errors:
+            raise ValidationError("\n".join(validation_errors))
 
         return final_vars
