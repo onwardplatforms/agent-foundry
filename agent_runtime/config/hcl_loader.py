@@ -16,17 +16,204 @@ logger = logging.getLogger(__name__)
 
 class SchemaValidator:
     """
-    Replace with your real validation logic or leave as-is if you only do
-    minimal checks. The validate() method returns a list of errors (strings).
+    Validates HCL configuration including peer-to-peer references.
+    The validate() method returns a list of errors (strings).
     If empty, means valid; otherwise, you can raise an exception.
     """
+
+    REF_PATTERN = re.compile(r"\$\{([^}]+)\}")
 
     def __init__(self):
         pass
 
     def validate(self, raw_config: Dict[str, Any]) -> List[str]:
-        # Dummy stub that never complains
-        return []
+        errors: List[str] = []
+
+        # First collect all defined names and their structures
+        self.defined_vars: Dict[str, Any] = {}
+        self.defined_models: Dict[str, Any] = {}
+        self.defined_plugins: Dict[str, Any] = {}
+        self.defined_agents: Dict[str, Any] = {}
+
+        # Extract variable definitions with their structure
+        for var_block in raw_config.get("variable", []):
+            if isinstance(var_block, dict):
+                for name, content in var_block.items():
+                    self.defined_vars[name] = content
+
+        # Extract model definitions with their structure
+        for model_block in raw_config.get("model", []):
+            if isinstance(model_block, dict):
+                for name, content in model_block.items():
+                    self.defined_models[name] = content
+
+        # Extract plugin definitions with their structure
+        for plugin_block in raw_config.get("plugin", []):
+            if isinstance(plugin_block, dict):
+                for plugin_type, inner in plugin_block.items():
+                    if isinstance(inner, dict):
+                        for plugin_name, content in inner.items():
+                            self.defined_plugins[f"{plugin_type}:{plugin_name}"] = (
+                                content
+                            )
+
+        # Extract agent definitions with their structure
+        for agent_block in raw_config.get("agent", []):
+            if isinstance(agent_block, dict):
+                for name, content in agent_block.items():
+                    self.defined_agents[name] = content
+
+        # Now validate all references in the config
+        self._validate_references_in_dict(raw_config, errors)
+
+        return errors
+
+    def _validate_references_in_dict(
+        self, d: Dict[str, Any], errors: List[str], path: str = ""
+    ) -> None:
+        """Recursively validate all references in a dictionary."""
+        for k, v in d.items():
+            current_path = f"{path}.{k}" if path else k
+
+            if isinstance(v, dict):
+                self._validate_references_in_dict(v, errors, current_path)
+            elif isinstance(v, list):
+                for i, item in enumerate(v):
+                    if isinstance(item, dict):
+                        self._validate_references_in_dict(
+                            item, errors, f"{current_path}[{i}]"
+                        )
+                    elif isinstance(item, str):
+                        self._validate_string_references(
+                            item, errors, f"{current_path}[{i}]"
+                        )
+            elif isinstance(v, str):
+                self._validate_string_references(v, errors, current_path)
+
+    def _validate_string_references(
+        self, val: str, errors: List[str], path: str
+    ) -> None:
+        """Validate all references in a string value."""
+        for m in self.REF_PATTERN.finditer(val):
+            ref = m.group(1).strip()
+            self._validate_reference(ref, errors, path)
+
+    def _validate_reference(self, ref: str, errors: List[str], path: str) -> None:
+        """Validate a single reference, handling nested paths."""
+        parts = ref.split(".")
+
+        if not parts:
+            return
+
+        # Handle the root reference first
+        if parts[0] == "var":
+            if len(parts) < 2:
+                errors.append(f"Invalid variable reference '{ref}' at {path}")
+                return
+            var_name = parts[1]
+            if var_name not in self.defined_vars:
+                errors.append(
+                    f"Reference to undefined variable 'var.{var_name}' at {path}"
+                )
+                return
+            # For nested references, validate against the variable's structure
+            if len(parts) > 2:
+                self._validate_nested_reference(
+                    parts[2:],
+                    self.defined_vars[var_name],
+                    f"var.{var_name}",
+                    errors,
+                    path,
+                )
+
+        elif parts[0] == "model":
+            if len(parts) < 2:
+                errors.append(f"Invalid model reference '{ref}' at {path}")
+                return
+            model_name = parts[1]
+            if model_name not in self.defined_models:
+                errors.append(
+                    f"Reference to undefined model 'model.{model_name}' at {path}"
+                )
+                return
+            # For nested references, validate against the model's structure
+            if len(parts) > 2:
+                self._validate_nested_reference(
+                    parts[2:],
+                    self.defined_models[model_name],
+                    f"model.{model_name}",
+                    errors,
+                    path,
+                )
+
+        elif parts[0] == "plugin":
+            if len(parts) < 3:
+                errors.append(f"Invalid plugin reference '{ref}' at {path}")
+                return
+            plugin_key = f"{parts[1]}:{parts[2]}"
+            if plugin_key not in self.defined_plugins:
+                errors.append(
+                    f"Reference to undefined plugin 'plugin.{parts[1]}.{parts[2]}' at {path}"
+                )
+                return
+            # For nested references, validate against the plugin's structure
+            if len(parts) > 3:
+                self._validate_nested_reference(
+                    parts[3:],
+                    self.defined_plugins[plugin_key],
+                    f"plugin.{parts[1]}.{parts[2]}",
+                    errors,
+                    path,
+                )
+
+        elif parts[0] == "agent":
+            if len(parts) < 2:
+                errors.append(f"Invalid agent reference '{ref}' at {path}")
+                return
+            agent_name = parts[1]
+            if agent_name not in self.defined_agents:
+                errors.append(
+                    f"Reference to undefined agent 'agent.{agent_name}' at {path}"
+                )
+                return
+            # For nested references, validate against the agent's structure
+            if len(parts) > 2:
+                self._validate_nested_reference(
+                    parts[2:],
+                    self.defined_agents[agent_name],
+                    f"agent.{agent_name}",
+                    errors,
+                    path,
+                )
+
+    def _validate_nested_reference(
+        self,
+        parts: List[str],
+        structure: Any,
+        ref_path: str,
+        errors: List[str],
+        path: str,
+    ) -> None:
+        """Validate nested reference parts against a structure."""
+        current = structure
+        logger.debug(
+            f"Validating nested reference: {ref_path}.{'.'.join(parts)} at {path}"
+        )
+        logger.debug(f"Structure: {current}")
+
+        for i, part in enumerate(parts):
+            if not isinstance(current, dict):
+                errors.append(
+                    f"Invalid nested reference '{ref_path}.{'.'.join(parts[:i+1])}' at {path} - parent is not a dictionary"
+                )
+                return
+            if part not in current:
+                errors.append(
+                    f"Invalid nested reference '{ref_path}.{'.'.join(parts[:i+1])}' at {path} - field does not exist"
+                )
+                return
+            current = current[part]
+            logger.debug(f"After part {part}: {current}")
 
 
 ##############################################################################
