@@ -611,8 +611,17 @@ class HCLConfigLoader:
         self.agents: Dict[str, Any] = {}
 
     def load_config(
-        self, external_var_values: Optional[Dict[str, Any]] = None
+        self,
+        var_loader: Optional["VarLoader"] = None,
+        external_var_values: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """
+        Load and process configuration.
+
+        Args:
+            var_loader: Optional VarLoader instance for handling variables
+            external_var_values: Legacy support for external values (deprecated)
+        """
         all_raw_configs = self._load_and_validate_files()
 
         # Merge them all
@@ -620,9 +629,13 @@ class HCLConfigLoader:
             self.merger.merge_hcl_config(rc)
 
         # Now compute final variables
-        final_vars = compute_final_variables(
-            self.merger.variables_def, external_var_values
-        )
+        if var_loader:
+            final_vars = var_loader.get_final_values(self.merger.variables_def)
+        else:
+            # Legacy support
+            final_vars = compute_final_variables(
+                self.merger.variables_def, external_var_values
+            )
 
         # Put them in self
         self.runtime = self.merger.runtime
@@ -638,7 +651,7 @@ class HCLConfigLoader:
             models=self.models,
             plugins=self.plugins,
             agents=self.agents,
-            max_passes=5,  # or however many
+            max_passes=5,
         )
         interp.interpolate_all()
 

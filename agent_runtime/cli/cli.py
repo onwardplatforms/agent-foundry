@@ -116,17 +116,32 @@ def init(dir: Path, agent: Optional[str] = None) -> None:
     help="Directory containing HCL config files",
 )
 @click.option(
+    "--var-file",
+    type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path),
+    multiple=True,
+    help="HCL variable file(s) to load",
+)
+@click.option(
+    "--var",
+    multiple=True,
+    help="Individual variable values (format: 'name=value')",
+)
+@click.option(
     "--agent",
     type=str,
     help="Name of the agent to run (required if multiple agents are configured)",
 )
-def run(dir: Path, agent: Optional[str]) -> None:
+def run(
+    dir: Path, var_file: tuple[Path, ...], var: tuple[str, ...], agent: Optional[str]
+) -> None:
     """Run an interactive session with an agent."""
     logger.debug("Running agent from directory: %s (agent=%s)", dir, agent)
+    logger.debug("Variable files: %s", var_file)
+    logger.debug("CLI variables: %s", var)
 
     try:
         click.echo(Style.header("Starting agent..."))
-        run_agent_interactive(dir, agent)
+        run_agent_interactive(dir, agent, var_files=var_file, cli_vars=var)
     except Exception as e:
         logger.exception("Error running agent.")
         click.echo(Style.error(str(e)))

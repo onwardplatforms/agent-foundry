@@ -2,12 +2,13 @@
 
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, List, AsyncIterator
+from typing import Dict, Any, Optional, List, AsyncIterator, Tuple
 
 import click
 from semantic_kernel import Kernel
 
 from .config.hcl_loader import HCLConfigLoader
+from .config.var_loader import VarLoader
 from .plugins.manager import PluginConfig, PluginManager
 from .agent import Agent
 from .cli.output import Style
@@ -36,23 +37,32 @@ async def _chat_loop(agent: Agent) -> AsyncIterator[str]:
             continue
 
 
-def load_and_validate_config(config_dir: Path) -> Dict[str, Any]:
-    """
-    Load HCL configs from the directory and perform all validation checks.
-    Returns the final dictionary of configurations including runtime, variables, models, plugins, and agents.
-    Raises exceptions if invalid or missing.
-    """
+def load_and_validate_config(
+    config_dir: Path,
+    var_files: Optional[Tuple[Path, ...]] = None,
+    cli_vars: Optional[Tuple[str, ...]] = None,
+) -> Dict[str, Any]:
+    """Load and validate configuration from directory."""
     loader = HCLConfigLoader(config_dir)
-    try:
-        config = loader.load_config()
-    except Exception as e:
-        # We re-raise as a RuntimeError so that the CLI can display them nicely.
-        raise RuntimeError(f"Error loading configuration: {e}")
 
-    if not config:
-        raise RuntimeError("No configurations found in HCL files.")
+    # Set up variable handling
+    var_loader = VarLoader()
 
-    return config
+    # Load var files if provided
+    if var_files:
+        for var_file in var_files:
+            var_loader.load_var_file(var_file)
+
+    # Add CLI vars if provided
+    if cli_vars:
+        for var in cli_vars:
+            var_loader.add_cli_var(var)
+
+    # Load environment variables
+    var_loader.load_env_vars()
+
+    # Load config with our variable values
+    return loader.load_config(var_loader=var_loader)
 
 
 def collect_plugins_for_agents(
@@ -172,14 +182,15 @@ def init_plugins(config_dir: Path, agent_name: Optional[str] = None) -> None:
     click.echo(Style.success("Plugins installed successfully."))
 
 
-def run_agent_interactive(config_dir: Path, agent_name: Optional[str] = None) -> None:
-    """
-    The 'run' step: load config, check lockfile, run chat in an interactive loop.
-    If multiple agents exist and agent_name is None, picks the first.
-    """
-    from .plugins.manager import PluginManager
+def run_agent_interactive(
+    config_dir: Path,
+    agent_name: Optional[str] = None,
+    var_files: Optional[Tuple[Path, ...]] = None,
+    cli_vars: Optional[Tuple[str, ...]] = None,
+) -> None:
+    """Run an interactive session with an agent."""
+    config = load_and_validate_config(config_dir, var_files, cli_vars)
 
-    config = load_and_validate_config(config_dir)
     agent_configs = config["agent"]
 
     # If multiple agents and user didn't pick one, pick the first
