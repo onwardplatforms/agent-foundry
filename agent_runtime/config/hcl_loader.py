@@ -7,7 +7,7 @@ import hcl2
 from pathlib import Path
 import re
 
-from ..validation import SchemaValidator
+from ..validation import get_schema_validator, ValidationContext
 
 logger = logging.getLogger(__name__)
 
@@ -400,6 +400,8 @@ class HCLConfigLoader:
         logger.debug("Found HCL files: %s", [str(f) for f in hcl_files])
 
         # First load & validate each raw file
+        validator = get_schema_validator()
+
         for hcl_file in hcl_files:
             file_errors = []
             logger.debug("Loading HCL file: %s", hcl_file)
@@ -408,103 +410,79 @@ class HCLConfigLoader:
                 logger.debug("Raw HCL content: %s", raw_config)
                 raw_configs.append(raw_config)
 
-                # Validate raw config using the schema
-                validator = SchemaValidator()
+                # Create a validation context for this file
+                context = ValidationContext()
 
-                # Validate runtime blocks
-                if "runtime" in raw_config:
-                    for block_instance in raw_config["runtime"]:
-                        errors = validator.validate_config(block_instance, "runtime")
-                        if errors:
-                            file_errors.append("In runtime block:")
-                            file_errors.extend(f"  - {err}" for err in errors)
+                # Validate each block type
+                for block_type, blocks in raw_config.items():
+                    if not isinstance(blocks, list):
+                        continue
 
-                # Validate variable blocks
-                if "variable" in raw_config:
-                    for block_instance in raw_config["variable"]:
-                        for label, block_content in block_instance.items():
-                            errors = validator.validate_config(
-                                block_content, "variable"
-                            )
-                            if errors:
-                                file_errors.append(f"In variable '{label}':")
-                                file_errors.extend(f"  - {err}" for err in errors)
+                    for block_instance in blocks:
+                        if block_type == "runtime":
+                            validator.validate_type(block_instance, "runtime", context)
 
-                # Validate model blocks
-                if "model" in raw_config:
-                    for block_instance in raw_config["model"]:
-                        for label, block_content in block_instance.items():
-                            errors = validator.validate_config(block_content, "model")
-                            if errors:
-                                file_errors.append(f"In model '{label}':")
-                                file_errors.extend(f"  - {err}" for err in errors)
-
-                # Validate plugin blocks
-                if "plugin" in raw_config:
-                    for block_instance in raw_config["plugin"]:
-                        for plugin_type, inner_block in block_instance.items():
-                            for plugin_name, block_content in inner_block.items():
-                                errors = validator.validate_config(
-                                    block_content, "plugin"
-                                )
-                                if errors:
-                                    file_errors.append(
-                                        f"In plugin '{plugin_type}:{plugin_name}':"
+                        elif block_type == "variable":
+                            for label, block_content in block_instance.items():
+                                with context.path("variable", label):
+                                    validator.validate_type(
+                                        block_content, "variable", context
                                     )
-                                    file_errors.extend(f"  - {err}" for err in errors)
 
-                # Validate agent blocks
-                if "agent" in raw_config:
-                    for block_instance in raw_config["agent"]:
-                        for label, block_content in block_instance.items():
-                            # Create a copy for validation
-                            validation_content = dict(block_content)
-
-                            # For model references, keep the field but skip inline validation
-                            if "model" in validation_content:
-                                model_value = validation_content["model"]
-                                if isinstance(model_value, dict):
-                                    # Only validate if it's an inline definition
-                                    model_errors = validator.validate_config(
-                                        model_value, "model"
+                        elif block_type == "model":
+                            for label, block_content in block_instance.items():
+                                with context.path("model", label):
+                                    validator.validate_type(
+                                        block_content, "model", context
                                     )
-                                    if model_errors:
-                                        file_errors.append(f"In agent '{label}' model:")
-                                        file_errors.extend(
-                                            f"  - {err}" for err in model_errors
+
+                        elif block_type == "plugin":
+                            for plugin_type, inner_block in block_instance.items():
+                                for plugin_name, block_content in inner_block.items():
+                                    with context.path(
+                                        "plugin", f"{plugin_type}:{plugin_name}"
+                                    ):
+                                        validator.validate_type(
+                                            block_content, "plugin", context
                                         )
 
-                            # For plugin references, keep the field but skip inline validation
-                            if "plugins" in validation_content:
-                                plugins = validation_content["plugins"]
-                                if isinstance(plugins, list):
-                                    for i, plugin in enumerate(plugins):
-                                        if isinstance(plugin, dict):
-                                            plugin_errors = validator.validate_config(
-                                                plugin, "plugin"
-                                            )
-                                            if plugin_errors:
-                                                file_errors.append(
-                                                    f"In agent '{label}' plugin[{i}]:"
-                                                )
-                                                file_errors.extend(
-                                                    f"  - {err}"
-                                                    for err in plugin_errors
+                        elif block_type == "agent":
+                            for label, block_content in block_instance.items():
+                                with context.path("agent", label):
+                                    # Create a copy for validation
+                                    validation_content = dict(block_content)
+
+                                    # For model references, validate inline definitions
+                                    if "model" in validation_content:
+                                        model_value = validation_content["model"]
+                                        if isinstance(model_value, dict):
+                                            with context.path("model"):
+                                                validator.validate_type(
+                                                    model_value, "model", context
                                                 )
 
-                            # Validate the agent block itself
-                            errors = validator.validate_config(
-                                validation_content, "agent"
-                            )
-                            if errors:
-                                file_errors.append(f"In agent '{label}':")
-                                file_errors.extend(f"  - {err}" for err in errors)
+                                    # For plugin references, validate inline definitions
+                                    if "plugins" in validation_content:
+                                        plugins = validation_content["plugins"]
+                                        if isinstance(plugins, list):
+                                            for i, plugin in enumerate(plugins):
+                                                if isinstance(plugin, dict):
+                                                    with context.path(f"plugin[{i}]"):
+                                                        validator.validate_type(
+                                                            plugin, "plugin", context
+                                                        )
 
-            # If we have errors in this file, record them
-            if file_errors:
-                all_errors.append(f"In file {hcl_file.name}:")
-                all_errors.extend(f"  {error}" for error in file_errors)
-                all_errors.append("")  # blank line
+                                    # Validate the agent block itself
+                                    validator.validate_type(
+                                        validation_content, "agent", context
+                                    )
+
+                # If we have errors in this file, record them
+                if context.has_errors:
+                    file_errors.append(f"In file {hcl_file.name}:")
+                    file_errors.extend(f"  {error}" for error in context.errors)
+                    file_errors.append("")  # blank line
+                    all_errors.extend(file_errors)
 
         # If we have any validation errors across any file, raise them all
         if all_errors:
