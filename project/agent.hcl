@@ -49,7 +49,7 @@ plugin "remote" "echo" {
 }
 
 agent "local" {
-  name           = "test-agent-local"
+  name           = "test-agent-local-${model.llama2_instance.name}"
   description    = "A test agent using Ollama provider (Local Development)"
   system_prompt  = "You are a helpful AI assistant."
   model          = model.llama2_instance

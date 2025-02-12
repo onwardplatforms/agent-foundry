@@ -515,35 +515,48 @@ class Interpolator:
         """
         We support references:
           var.name, model.name, plugin.local.echo, agent.remote, runtime.something
+        And nested references like:
+          model.llama2_instance.name, var.settings.temperature, etc.
         If unknown, return "" (empty string).
         """
         parts = expr.split(".")
         if not parts:
             return expr
 
-        # e.g. var.temperature
+        # Get the root object first
+        root_val = None
         if parts[0] == "var" and len(parts) > 1:
-            var_name = parts[1]
-            return self.variables.get(var_name, "")
-
-        if parts[0] == "model" and len(parts) > 1:
-            model_name = parts[1]
-            return self.models.get(model_name, "")
-
-        if parts[0] == "plugin" and len(parts) > 2:
+            root_val = self.variables.get(parts[1], "")
+        elif parts[0] == "model" and len(parts) > 1:
+            root_val = self.models.get(parts[1], "")
+        elif parts[0] == "plugin" and len(parts) > 2:
             plugin_key = f"{parts[1]}:{parts[2]}"
-            return self.plugins.get(plugin_key, "")
+            root_val = self.plugins.get(plugin_key, "")
+            parts = (
+                [parts[0]] + [f"{parts[1]}:{parts[2]}"] + parts[3:]
+            )  # Adjust parts list
+        elif parts[0] == "agent" and len(parts) > 1:
+            root_val = self.agents.get(parts[1], "")
+        elif parts[0] == "runtime" and len(parts) > 1:
+            root_val = self.runtime.get(parts[1], "")
+        else:
+            return expr
 
-        if parts[0] == "agent" and len(parts) > 1:
-            agent_name = parts[1]
-            return self.agents.get(agent_name, "")
+        # Now traverse into nested fields if they exist
+        current = root_val
+        for part in parts[2:]:  # Skip the type and name parts we already handled
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            elif isinstance(current, list) and part.isdigit():
+                idx = int(part)
+                if 0 <= idx < len(current):
+                    current = current[idx]
+                else:
+                    return ""
+            else:
+                return ""
 
-        if parts[0] == "runtime" and len(parts) > 1:
-            key = parts[1]
-            return self.runtime.get(key, "")
-
-        # If not recognized, return expr as-is
-        return expr
+        return current
 
     def _try_convert_primitive(self, val: str) -> Any:
         """
