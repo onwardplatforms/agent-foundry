@@ -41,6 +41,9 @@ def set_debug_logging(debug: bool) -> None:
         logging.getLogger("httpx").setLevel(
             logging.INFO
         )  # Show HTTP requests in debug mode
+        logging.getLogger("semantic_kernel.functions.kernel_function").setLevel(
+            logging.INFO
+        )
         click.echo(Style.info("Debug mode enabled - logging=DEBUG"))
     else:
         logging.getLogger("agent_runtime").setLevel(logging.INFO)
@@ -48,6 +51,9 @@ def set_debug_logging(debug: bool) -> None:
         logging.getLogger("httpx").setLevel(
             logging.WARNING
         )  # Hide HTTP requests in normal mode
+        logging.getLogger("semantic_kernel.functions.kernel_function").setLevel(
+            logging.WARNING
+        )
 
 
 @click.group()
