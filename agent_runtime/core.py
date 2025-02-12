@@ -65,7 +65,43 @@ def collect_plugins_for_agents(
     all_plugins = {}
 
     # First collect all plugins from the raw configuration
+    # Note: HCL loader will only include non-commented blocks
     raw_plugins = agent_configs.get("plugin", {})
+    logger.debug("Raw plugins from config: %s", raw_plugins)
+
+    # If agent_name is specified, only collect plugins used by that agent
+    if agent_name:
+        agent_cfg = agent_configs.get("agent", {}).get(agent_name)
+        if not agent_cfg:
+            raise ValueError(f"Agent '{agent_name}' not found in configuration.")
+
+        # Get the list of plugin references for this agent
+        agent_plugins = agent_cfg.get("plugins", [])
+        needed_plugins = set()
+
+        # Collect the plugin keys that this agent needs
+        for plugin_ref in agent_plugins:
+            if isinstance(plugin_ref, str):
+                # Handle ${plugin.type.name} references
+                if plugin_ref.startswith("${plugin."):
+                    parts = plugin_ref.strip("${").strip("}").split(".")
+                    if len(parts) == 3:  # plugin.type.name
+                        plugin_key = f"{parts[1]}:{parts[2]}"
+                        needed_plugins.add(plugin_key)
+            elif isinstance(plugin_ref, dict):
+                # Handle inline plugin definitions
+                plugin_type = plugin_ref.get("type")
+                plugin_name = plugin_ref.get("name")
+                if plugin_type and plugin_name:
+                    plugin_key = f"{plugin_type}:{plugin_name}"
+                    needed_plugins.add(plugin_key)
+
+        logger.debug("Needed plugins for agent '%s': %s", agent_name, needed_plugins)
+        # Only process plugins that this agent needs AND that exist in raw_plugins
+        raw_plugins = {k: v for k, v in raw_plugins.items() if k in needed_plugins}
+        logger.debug("Filtered plugins for agent '%s': %s", agent_name, raw_plugins)
+
+    # Create PluginConfig objects for the needed plugins
     for plugin_key, plugin_def in raw_plugins.items():
         plugin_type, plugin_name = plugin_key.split(":")
         pc = PluginConfig(
@@ -77,6 +113,9 @@ def collect_plugins_for_agents(
         )
         all_plugins[plugin_key] = pc
 
+    logger.debug(
+        "Final plugin configs: %s", [p.scoped_name for p in all_plugins.values()]
+    )
     return list(all_plugins.values())
 
 
@@ -89,24 +128,37 @@ def init_plugins(config_dir: Path, agent_name: Optional[str] = None) -> None:
     from .plugins.manager import PluginManager
 
     config = load_and_validate_config(config_dir)
-    plugin_list = collect_plugins_for_agents(config, agent_name)
 
-    if not plugin_list:
-        click.echo(Style.info("No plugins found. Nothing to do."))
-        # Even with no plugins, we should update the lockfile to remove any previously locked plugins
-        pm = PluginManager(config_dir, Kernel())
-        new_data = pm.create_lock_data()
-        pm.write_lockfile(config_dir / "plugins.lock.json", new_data)
-        return
+    # First collect all plugins that should exist
+    if agent_name:
+        # If agent specified, only get plugins for that agent
+        plugin_list = collect_plugins_for_agents(config, agent_name)
+    else:
+        # Otherwise get all plugins defined in the config
+        plugin_list = collect_plugins_for_agents(config)
 
     kernel = Kernel()
     pm = PluginManager(config_dir, kernel)
 
-    # Compare with existing lock
+    # Clear existing configs and store new ones using scoped names
     pm.plugin_configs.clear()
     for pc in plugin_list:
         pm.plugin_configs[pc.scoped_name] = pc
 
+    # Always create a new lockfile with just the current plugins
+    logger.debug(
+        "Creating new lockfile with plugins: %s", [p.scoped_name for p in plugin_list]
+    )
+    new_data = {"plugins": []}
+    if plugin_list:
+        new_data = pm.create_lock_data()
+    pm.write_lockfile(config_dir / "plugins.lock.json", new_data)
+
+    if not plugin_list:
+        click.echo(Style.info("No plugins found. Lockfile cleaned."))
+        return
+
+    # Now check if we need to install anything
     if pm.compare_with_lock(plugin_list):
         click.echo(Style.success("All plugins are up to date."))
         # Load from local cache
@@ -117,7 +169,7 @@ def init_plugins(config_dir: Path, agent_name: Optional[str] = None) -> None:
         return
 
     pm.install_and_load_plugins(plugin_list, force_reinstall=False)
-    click.echo(Style.success("Plugins installed successfully; lockfile updated."))
+    click.echo(Style.success("Plugins installed successfully."))
 
 
 def run_agent_interactive(config_dir: Path, agent_name: Optional[str] = None) -> None:
@@ -158,8 +210,11 @@ def run_agent_interactive(config_dir: Path, agent_name: Optional[str] = None) ->
         lockfile = config_dir / "plugins.lock.json"
         if not lockfile.exists():
             raise RuntimeError("No lockfile found. Please run 'init' first.")
+
         lock_data = pm.read_lockfile(lockfile)
-        if not pm.compare_with_lock(plugin_list, lock_data):
+
+        # Only compare the plugins that this agent needs
+        if not pm.compare_with_lock(github_plugins, lock_data):
             raise RuntimeError(
                 "Your plugin configuration has changed since last init. "
                 "Please run 'init' again to update."

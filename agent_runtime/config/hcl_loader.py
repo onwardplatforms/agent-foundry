@@ -531,7 +531,7 @@ class HCLConfigLoader:
             logger.debug("Loading HCL file: %s", hcl_file)
             with open(hcl_file) as f:
                 raw_config = hcl2.load(f)
-                logger.debug("Raw HCL content: %s", raw_config)
+                logger.debug("Raw HCL content from %s: %s", hcl_file, raw_config)
                 raw_configs.append(raw_config)
 
                 # Create a validation context for this file
@@ -617,6 +617,7 @@ class HCLConfigLoader:
         # If validation succeeded, merge configs
         for raw_config in raw_configs:
             self._merge_config(raw_config)
+            logger.debug("After merging config, state is: plugins=%s", self.plugins)
 
         # After merging, do further processing (not schema errors but typed references, etc.)
         self._process_variables()

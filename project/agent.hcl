@@ -42,10 +42,10 @@ agent "local" {
   plugins        = [plugin.local.echo]
 }
 
-# agent "remote" {
-#   name           = "test-agent"
-#   description    = "A test agent using Ollama provider"
-#   system_prompt  = "Always say Jeff"
-#   model          = model.llama2_instance
-#   plugins        = [plugin.remote.echo]
-# }
+agent "remote" {
+  name           = "test-agent"
+  description    = "A test agent using Ollama provider"
+  system_prompt  = "Always say Jeff"
+  model          = model.llama2_instance
+  plugins        = [plugin.remote.echo]
+}

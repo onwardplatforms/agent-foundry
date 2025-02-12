@@ -510,9 +510,19 @@ class PluginManager:
         self.logger.debug("Instantiating plugin class: %s", plugin_class.__name__)
         instance = plugin_class()
 
-        # Register with kernel using the plugin's 'name'
-        self.logger.debug("Registering plugin with kernel as: %s", plugin_config.name)
-        return self.kernel.add_plugin(instance, plugin_name=plugin_config.name)
+        # Register with kernel using sanitized scoped name to prevent collisions
+        # Sanitize the name to be compatible with SK's requirements (alphanumeric and underscores)
+        sanitized_name = (
+            plugin_config.scoped_name.replace("/", "_")
+            .replace("@", "")
+            .replace("-", "_")
+        )
+        self.logger.debug(
+            "Registering plugin with kernel as: %s (from %s)",
+            sanitized_name,
+            plugin_config.scoped_name,
+        )
+        return self.kernel.add_plugin(instance, plugin_name=sanitized_name)
 
     def install_and_load_plugins(
         self, configs: List[PluginConfig], force_reinstall: bool = False
@@ -614,20 +624,18 @@ class PluginManager:
         locked_scoped_names = set(locked_map.keys())
         self.logger.debug("Locked plugins: %s", list(locked_scoped_names))
 
-        # Check for plugins that have been removed from configuration
-        removed_plugins = locked_scoped_names - current_scoped_names
-        if removed_plugins:
-            self.logger.debug("Plugins have been removed: %s", removed_plugins)
+        # Check for plugins that are not in the lockfile
+        missing_plugins = current_scoped_names - locked_scoped_names
+        if missing_plugins:
+            self.logger.debug("Plugins missing from lockfile: %s", missing_plugins)
             return False
 
-        # Check for plugins that have been added to configuration
-        added_plugins = current_scoped_names - locked_scoped_names
-        if added_plugins:
-            self.logger.debug("New plugins need to be added: %s", added_plugins)
-            return False
-
-        # For each plugin, check source and type
+        # For each plugin we care about, check source and type
         for cfg in plugins:
+            if cfg.scoped_name not in locked_map:
+                self.logger.debug("Plugin '%s' not in lockfile", cfg.scoped_name)
+                return False
+
             locked = locked_map[cfg.scoped_name]
 
             # Compare source and type
