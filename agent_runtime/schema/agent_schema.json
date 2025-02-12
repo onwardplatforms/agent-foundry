@@ -1,174 +1,156 @@
 {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "type": "object",
-    "required": [
-        "name",
-        "description",
-        "system_prompt",
-        "model",
-        "plugins"
-    ],
-    "properties": {
-        "name": {
-            "type": "string",
-            "description": "Name of the agent"
+    "format_version": "0.1",
+    "agent_runtime_version": "0.0.1",
+    "schemas": {
+        "runtime": {
+            "version": 1,
+            "block": {
+                "attributes": {
+                    "required_version": {
+                        "type": "string",
+                        "required": false,
+                        "description": "Required version of Agent Runtime",
+                        "pattern": "^\\d+\\.\\d+\\.\\d+$"
+                    }
+                }
+            }
         },
-        "description": {
-            "type": "string",
-            "description": "Description of what the agent does"
-        },
-        "system_prompt": {
-            "type": "string",
-            "description": "System prompt that defines the agent's behavior"
+        "variable": {
+            "version": 1,
+            "block": {
+                "attributes": {
+                    "type": {
+                        "type": "string",
+                        "required": false,
+                        "description": "Type constraint for the variable",
+                        "options": [
+                            "string",
+                            "number",
+                            "bool",
+                            "list",
+                            "map",
+                            "any"
+                        ]
+                    },
+                    "description": {
+                        "type": "string",
+                        "required": false,
+                        "description": "Description of the variable's purpose"
+                    },
+                    "default": {
+                        "type": "any",
+                        "required": false,
+                        "description": "Default value if not set"
+                    },
+                    "sensitive": {
+                        "type": "bool",
+                        "required": false,
+                        "description": "Whether this variable contains sensitive data"
+                    }
+                }
+            }
         },
         "model": {
-            "type": "object",
-            "required": [
-                "provider",
-                "name"
-            ],
-            "properties": {
-                "provider": {
-                    "type": "string",
-                    "enum": [
-                        "openai",
-                        "azure",
-                        "ollama"
-                    ],
-                    "description": "The AI model provider to use"
+            "version": 1,
+            "block": {
+                "attributes": {
+                    "provider": {
+                        "type": "string",
+                        "required": true,
+                        "description": "The AI model provider to use",
+                        "options": [
+                            "openai",
+                            "ollama"
+                        ]
+                    },
+                    "name": {
+                        "type": "string",
+                        "required": true,
+                        "description": "Name/ID of the model to use (e.g. gpt-4, gpt-3.5-turbo)"
+                    }
                 },
-                "name": {
-                    "type": "string",
-                    "description": "Name/ID of the model to use (e.g. gpt-4, gpt-3.5-turbo)"
-                },
-                "settings": {
-                    "type": "object",
-                    "description": "Optional provider-specific settings",
-                    "properties": {
-                        "temperature": {
-                            "type": "number",
-                            "minimum": 0,
-                            "maximum": 1
-                        },
-                        "max_tokens": {
-                            "type": "integer",
-                            "minimum": 1
+                "block_types": {
+                    "settings": {
+                        "nesting_mode": "single",
+                        "block": {
+                            "attributes": {
+                                "temperature": {
+                                    "type": "number",
+                                    "required": false,
+                                    "description": "Temperature for model sampling",
+                                    "constraints": {
+                                        "min": 0,
+                                        "max": 1
+                                    }
+                                },
+                                "max_tokens": {
+                                    "type": "number",
+                                    "required": false,
+                                    "description": "Maximum tokens to generate",
+                                    "constraints": {
+                                        "min": 1
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
         },
-        "plugins": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "required": [
-                    "source"
-                ],
-                "properties": {
+        "plugin": {
+            "version": 1,
+            "block": {
+                "attributes": {
                     "source": {
                         "type": "string",
-                        "description": "GitHub repository URL or path to the plugin",
-                        "pattern": "^(https://github\\.com/[\\w-]+/[\\w-]+|github\\.com/[\\w-]+/[\\w-]+|[\\w/-]+)$"
+                        "required": true,
+                        "description": "Source path or URL",
+                        "pattern": "^(\\.\\/.*|\\.\\.\\/.*|https://github\\.com/[\\w-]+/[\\w-]+|[\\w-]+/[\\w-]+)$"
                     },
                     "version": {
                         "type": "string",
-                        "description": "Version of the plugin to use (git tag or commit hash). Cannot be used with branch."
-                    },
-                    "branch": {
-                        "type": "string",
-                        "description": "Branch to use for the plugin. Cannot be used with version. Defaults to 'main' if neither version nor branch is specified."
+                        "required": false,
+                        "description": "Version (required for remote plugins)",
+                        "pattern": "^v?\\d+\\.\\d+\\.\\d+(-[\\w.]+)?$"
                     },
                     "variables": {
-                        "type": "object",
-                        "description": "Plugin-specific configuration variables",
-                        "propertyNames": {
-                            "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$"
-                        },
-                        "additionalProperties": {
-                            "type": "string",
-                            "pattern": "^\\$[A-Z_][A-Z0-9_]*$"
-                        }
+                        "type": "map",
+                        "required": false,
+                        "description": "Variables to pass to the plugin"
                     }
-                },
-                "allOf": [
-                    {
-                        "if": {
-                            "properties": {
-                                "source": {
-                                    "pattern": "^(https://github\\.com/|github\\.com/)"
-                                }
-                            }
-                        },
-                        "then": {
-                            "oneOf": [
-                                {
-                                    "required": [
-                                        "version"
-                                    ],
-                                    "not": {
-                                        "required": [
-                                            "branch"
-                                        ]
-                                    }
-                                },
-                                {
-                                    "required": [
-                                        "branch"
-                                    ],
-                                    "not": {
-                                        "required": [
-                                            "version"
-                                        ]
-                                    }
-                                },
-                                {
-                                    "not": {
-                                        "anyOf": [
-                                            {
-                                                "required": [
-                                                    "version"
-                                                ]
-                                            },
-                                            {
-                                                "required": [
-                                                    "branch"
-                                                ]
-                                            }
-                                        ]
-                                    }
-                                }
-                            ]
-                        }
+                }
+            }
+        },
+        "agent": {
+            "version": 1,
+            "block": {
+                "attributes": {
+                    "name": {
+                        "type": "string",
+                        "required": true,
+                        "description": "Name of the agent"
                     },
-                    {
-                        "if": {
-                            "properties": {
-                                "source": {
-                                    "not": {
-                                        "pattern": "^(https://github\\.com/|github\\.com/)"
-                                    }
-                                }
-                            }
-                        },
-                        "then": {
-                            "not": {
-                                "anyOf": [
-                                    {
-                                        "required": [
-                                            "version"
-                                        ]
-                                    },
-                                    {
-                                        "required": [
-                                            "branch"
-                                        ]
-                                    }
-                                ]
-                            }
-                        }
+                    "description": {
+                        "type": "string",
+                        "required": true,
+                        "description": "Description of what the agent does"
+                    },
+                    "system_prompt": {
+                        "type": "string",
+                        "required": true,
+                        "description": "System prompt that defines the agent's behavior"
+                    },
+                    "model": {
+                        "type": "string",
+                        "required": true,
+                        "description": "Model reference (e.g. ${model.name}) or inline definition"
+                    },
+                    "plugins": {
+                        "type": "list",
+                        "required": false,
+                        "description": "List of plugin references (e.g. ${plugin.type.name}) or inline definitions"
                     }
-                ]
+                }
             }
         }
     }

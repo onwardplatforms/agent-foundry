@@ -1,17 +1,20 @@
+# agent_runtime/config/hcl_loader.py
+
 import os
 import logging
 from typing import Dict, Any, List
 import hcl2
 from pathlib import Path
-from glob import glob
 import re
+
+from ..validation import SchemaValidator
 
 logger = logging.getLogger(__name__)
 
 
 class HCLConfigLoader:
     def __init__(self, config_dir: str):
-        self.config_dir = config_dir
+        self.config_dir = Path(config_dir)
         self.variables = {}
         self.models = {}
         self.plugins = {}
@@ -51,7 +54,7 @@ class HCLConfigLoader:
                     block_name, block_value = next(iter(block.items()))
                     self.models[block_name] = self._convert_block_values(block_value)
                 elif block_type == "plugin":
-                    # Handle dual identifiers for plugins
+                    # Handle dual identifiers for plugins, e.g. plugin "local" "echo"
                     if len(block) != 1:
                         logger.debug("Skipping invalid plugin block: %s", block)
                         continue
@@ -89,6 +92,10 @@ class HCLConfigLoader:
                     except ValueError:
                         result[key] = value
             elif isinstance(value, dict):
+                # If this is a block (no equals sign in HCL), mark it
+                if value.get("_block", False):
+                    value["_is_block"] = True
+                    del value["_block"]
                 result[key] = self._convert_block_values(value)
             elif isinstance(value, list):
                 result[key] = [
@@ -117,7 +124,6 @@ class HCLConfigLoader:
         parse it, evaluate the condition, and return "big" or "small".
         We only handle a single '? :', no nesting.
         """
-        # e.g. expr might be: var.environment == "prod" ? "big" : "small"
         pattern = re.compile(r"^(.*?)\?(.*?)\:(.*)$")
         m = pattern.match(expr.strip())
         if not m:
@@ -129,20 +135,16 @@ class HCLConfigLoader:
         false_part = m.group(3).strip()
 
         # Evaluate condition. We'll do a naive approach:
-        # 1) Interpolate references in condition_part
         cond_str = str(self._interpolate_value(condition_part))
-        # 2) Evaluate as a python expression (careful if untrusted!)
+
         try:
             # We'll block builtins for safety
             result_bool = eval(cond_str, {"__builtins__": None}, {})
         except Exception as e:
             logger.debug(f"Failed to evaluate condition '{cond_str}': {e}")
-            # fallback => treat as false
             result_bool = False
 
-        # Then pick true_part or false_part
         chosen_str = true_part if result_bool else false_part
-        # also interpolate references inside chosen_str
         chosen_str = str(self._interpolate_value(chosen_str))
         return chosen_str
 
@@ -150,42 +152,32 @@ class HCLConfigLoader:
         """Interpolate a value, including basic ternary conditionals and references."""
         logger.debug("Interpolating value: %s (type: %s)", value, type(value))
         if isinstance(value, str):
-            # 1) If there's a top-level "?" and ":", try ternary parse
-            #    but only if we don't see braces (like "prefix-${...}")
-            #    We'll handle the simpler expression-only scenario
+            # 1) If there's a top-level ? and :, try ternary parse
             if "?" in value and ":" in value and not value.startswith("${"):
-                # naive approach, see if we can parse it as a ternary
-                # caution: won't handle partial "prefix- x ? y : z -suffix"
                 new_val = self._evaluate_ternary(value)
                 if new_val != value:
                     return new_val
 
-            # 2) Handle ${...} references or conditionals
-            # We'll do multiple passes if there's more than one
+            # 2) Handle ${...} references
             pattern = re.compile(r"\$\{([^}]+)\}")
             result = value
             while True:
                 match = pattern.search(result)
                 if not match:
                     break
-                full_expr = match.group(0)  # e.g. '${var.something}'
-                inner_expr = match.group(1).strip()  # might contain references or ? :
-                # If there's a ? and :, attempt ternary first
+                full_expr = match.group(0)  # '${...}'
+                inner_expr = match.group(1).strip()
+                # If there's a ? and :, attempt ternary
                 if "?" in inner_expr and ":" in inner_expr:
-                    # Evaluate as ternary
                     sub_val = self._evaluate_ternary(inner_expr)
                 else:
-                    # Otherwise do normal reference interpolation
                     sub_val = self._basic_ref_interpolation(inner_expr)
 
-                # If sub_val is a dict, return it directly
                 if isinstance(sub_val, dict):
-                    return sub_val
+                    return sub_val  # Return dict directly if needed
 
-                # Convert to str if not already
                 if not isinstance(sub_val, str):
                     sub_val = str(sub_val)
-                # Replace
                 start, end = match.span()
                 result = result[:start] + sub_val + result[end:]
             return result
@@ -197,22 +189,11 @@ class HCLConfigLoader:
         return value
 
     def _basic_ref_interpolation(self, expr: str) -> Any:
-        """
-        Handle references like var.x, model.y, plugin.z.
-        Uses the generic reference resolution system.
-        """
+        """Handle references like var.x, model.y, plugin.z."""
         return self._resolve_reference(expr)
 
     def _convert_value(self, value: Any, target_type: str) -> Any:
-        """Convert a value to the specified type.
-
-        Args:
-            value: The value to convert
-            target_type: The type to convert to ('number', 'string', 'int', 'float', 'bool')
-
-        Returns:
-            The converted value
-        """
+        """Convert a value to the specified type."""
         # If value is already the right type, return it
         if target_type == "number" and isinstance(value, (int, float)):
             return value
@@ -251,29 +232,26 @@ class HCLConfigLoader:
         logger.debug("Processing models: %s", self.models)
         for model_name, model_config in self.models.items():
             logger.debug("Processing model '%s': %s", model_name, model_config)
-
-            # Replace variable references
+            # Replace variable references in settings if any
             if "settings" in model_config:
                 settings = self._interpolate_value(model_config["settings"])
                 logger.debug("Interpolated settings: %s", settings)
 
-                # Get type information from the model config
-                setting_types = model_config.get("setting_types", {})
-                if not setting_types:
-                    # Default type mappings if not specified
-                    setting_types = {
-                        "temperature": "float",
-                        "max_tokens": "int",
-                        "top_p": "float",
-                        "frequency_penalty": "float",
-                        "presence_penalty": "float",
-                        "top_k": "int",
-                        "repeat_penalty": "float",
-                        "stop": "string",
-                    }
-                logger.debug("Using setting types: %s", setting_types)
+                # Mark settings as a block if it came from HCL block syntax
+                if isinstance(settings, dict) and settings.get("_is_block", False):
+                    del settings["_is_block"]
 
-                # Convert settings to proper types
+                setting_types = {
+                    "temperature": "float",
+                    "max_tokens": "int",
+                    "top_p": "float",
+                    "frequency_penalty": "float",
+                    "presence_penalty": "float",
+                    "top_k": "int",
+                    "repeat_penalty": "float",
+                    "stop": "string",
+                }
+
                 if isinstance(settings, dict):
                     for key, value in settings.items():
                         if key in setting_types:
@@ -290,7 +268,7 @@ class HCLConfigLoader:
 
                 model_config["settings"] = settings
 
-            # Ensure other required fields
+            # Ensure required fields
             if "provider" not in model_config:
                 logger.error("Model '%s' missing required 'provider' field", model_name)
             if "name" not in model_config:
@@ -302,16 +280,15 @@ class HCLConfigLoader:
         """Process and validate all plugins after merging configurations"""
         logger.debug("Processing plugins: %s", self.plugins)
         for plugin_key, plugin_config in self.plugins.items():
-            # Validate plugin configuration
+            # Basic checks
             if "source" not in plugin_config:
                 raise ValueError(
                     f"Plugin {plugin_key} is missing required 'source' field"
                 )
 
-            plugin_type = plugin_config["type"]
-            plugin_name = plugin_config["name"]
+            plugin_type, plugin_name = plugin_key.split(":")
 
-            # Validate based on plugin type
+            # Check plugin type
             if plugin_type == "local":
                 if "version" in plugin_config:
                     raise ValueError(
@@ -329,12 +306,8 @@ class HCLConfigLoader:
                     raise ValueError(
                         f"Remote plugin {plugin_name} is missing required 'version' field"
                     )
-            else:
-                raise ValueError(
-                    f"Invalid plugin type '{plugin_type}' for plugin {plugin_name}"
-                )
 
-            # Add plugin name to variables for reference
+            # Ensure variables exists
             if "variables" not in plugin_config:
                 plugin_config["variables"] = {}
             plugin_config["variables"]["name"] = plugin_name
@@ -342,97 +315,30 @@ class HCLConfigLoader:
         logger.debug("Processed plugins: %s", self.plugins)
 
     def _resolve_reference(self, ref: str) -> Any:
-        """Resolve a reference like 'model.name' or 'plugin.type.name' to its actual value."""
+        """Resolve a reference like var.x, model.name, plugin.type.name, etc."""
         logger.debug("Resolving reference: %s (type: %s)", ref, type(ref))
 
         if not isinstance(ref, str):
-            logger.debug("Reference is not a string, returning as-is: %s", ref)
             return ref
 
         parts = ref.split(".")
         if len(parts) < 2:
-            logger.debug("Reference has insufficient parts, returning as-is: %s", ref)
             return ref
 
         ref_type = parts[0]
-        logger.debug("Reference type: %s, parts: %s", ref_type, parts)
 
         if ref_type == "var" and len(parts) == 2:
             result = self.variables.get(parts[1])
-            logger.debug("Resolved variable reference: %s => %s", ref, result)
             return result
 
         elif ref_type == "model" and len(parts) == 2:
             model_name = parts[1]
-            if model_name not in self.models:
-                logger.debug("Model not found: %s", model_name)
-                return None
-
-            # Get the model config and ensure it has required fields
-            model_config = dict(self.models[model_name])
-            logger.debug("Found model config: %s", model_config)
-
-            if not all(k in model_config for k in ["provider", "name"]):
-                logger.error("Model %s missing required fields", model_name)
-                return None
-
-            # Ensure settings are properly processed
-            if "settings" in model_config:
-                settings = model_config["settings"]
-                if isinstance(settings, dict):
-                    # Convert known setting types
-                    setting_types = {
-                        "temperature": "float",
-                        "max_tokens": "int",
-                        "top_p": "float",
-                        "frequency_penalty": "float",
-                        "presence_penalty": "float",
-                        "top_k": "int",
-                        "repeat_penalty": "float",
-                        "stop": "string",
-                    }
-                    processed_settings = {}
-                    for key, value in settings.items():
-                        if key in setting_types:
-                            processed_settings[key] = self._convert_value(
-                                value, setting_types[key]
-                            )
-                        else:
-                            processed_settings[key] = value
-                    model_config["settings"] = processed_settings
-                    logger.debug("Processed model settings: %s", processed_settings)
-
-            logger.debug("Returning resolved model config: %s", model_config)
-            return model_config
+            return self.models.get(model_name)
 
         elif ref_type == "plugin" and len(parts) == 3:
             plugin_type, plugin_name = parts[1:]
             plugin_key = f"{plugin_type}:{plugin_name}"
-            if plugin_key not in self.plugins:
-                return None
-
-            # Get the plugin config and ensure it has required fields
-            plugin_config = dict(self.plugins[plugin_key])
-            if not all(k in plugin_config for k in ["type", "name", "source"]):
-                logger.error("Plugin %s missing required fields", plugin_key)
-                return None
-
-            # Process variables if present
-            if "variables" in plugin_config:
-                variables = plugin_config["variables"]
-                if isinstance(variables, dict):
-                    # Convert any typed variables
-                    processed_vars = {}
-                    for var_name, var_value in variables.items():
-                        if isinstance(var_value, dict) and "type" in var_value:
-                            processed_vars[var_name] = self._convert_value(
-                                var_value.get("value"), var_value["type"]
-                            )
-                        else:
-                            processed_vars[var_name] = var_value
-                    plugin_config["variables"] = processed_vars
-
-            return plugin_config
+            return self.plugins.get(plugin_key)
 
         return ref
 
@@ -443,89 +349,38 @@ class HCLConfigLoader:
 
         for agent_name, agent_config in self.agents.items():
             logger.debug("Processing agent '%s': %s", agent_name, agent_config)
-            processed_config = dict(agent_config)  # Create a copy to modify
+            processed_config = dict(agent_config)  # copy
 
             # Replace model references
             if "model" in processed_config:
                 model_ref = processed_config["model"]
-                logger.debug("Processing model reference: %s", model_ref)
-
-                # If it's a direct reference (no ${...}), resolve it directly
-                if isinstance(model_ref, str) and not "${" in model_ref:
-                    resolved_model = self._resolve_reference(model_ref)
-                    if resolved_model is None:
+                if isinstance(model_ref, str):
+                    if "${" in model_ref:
+                        model_ref = self._interpolate_value(model_ref)
+                    else:
+                        model_ref = self._resolve_reference(model_ref)
+                    if model_ref is None:
                         raise ValueError(
                             f"Model referenced by agent '{agent_name}' not found"
                         )
-                    processed_config["model"] = resolved_model
-                    logger.debug("Resolved direct model reference: %s", resolved_model)
-                else:
-                    # Handle interpolated references
-                    model_ref = self._interpolate_value(model_ref)
-                    logger.debug("After interpolation: %s", model_ref)
-
-                    if isinstance(model_ref, str):
-                        resolved_model = self._resolve_reference(model_ref)
-                        if resolved_model is None:
-                            raise ValueError(
-                                f"Model referenced by agent '{agent_name}' not found"
-                            )
-                        processed_config["model"] = resolved_model
-                        logger.debug("Resolved interpolated model: %s", resolved_model)
-                    elif isinstance(model_ref, dict):
-                        # Already resolved during interpolation
-                        processed_config["model"] = model_ref
-                        logger.debug("Using pre-resolved model: %s", model_ref)
+                    processed_config["model"] = model_ref
 
             # Replace plugin references
             if "plugins" in processed_config:
                 plugins = []
-                logger.debug(
-                    "Processing plugin references: %s", processed_config["plugins"]
-                )
                 for plugin_ref in processed_config["plugins"]:
-                    logger.debug(
-                        "Processing plugin reference: %s (type: %s)",
-                        plugin_ref,
-                        type(plugin_ref),
-                    )
-
-                    # If it's a direct reference (no ${...}), resolve it directly
-                    if isinstance(plugin_ref, str) and not "${" in plugin_ref:
-                        resolved_plugin = self._resolve_reference(plugin_ref)
-                        if resolved_plugin is not None:
-                            plugins.append(resolved_plugin)
-                            logger.debug("Resolved direct plugin: %s", resolved_plugin)
+                    if isinstance(plugin_ref, str):
+                        if "${" in plugin_ref:
+                            plugin_ref = self._interpolate_value(plugin_ref)
                         else:
-                            logger.debug(
-                                "Invalid or unresolved plugin reference: %s", plugin_ref
-                            )
-                    else:
-                        # Handle interpolated references
-                        plugin_ref = self._interpolate_value(plugin_ref)
-                        logger.debug("After interpolation: %s", plugin_ref)
-
-                        if isinstance(plugin_ref, str):
-                            resolved_plugin = self._resolve_reference(plugin_ref)
-                            if resolved_plugin is not None:
-                                plugins.append(resolved_plugin)
-                                logger.debug(
-                                    "Resolved interpolated plugin: %s", resolved_plugin
-                                )
-                            else:
-                                logger.debug(
-                                    "Invalid or unresolved plugin reference: %s",
-                                    plugin_ref,
-                                )
-                        elif isinstance(plugin_ref, dict):
-                            # Already resolved during interpolation
+                            plugin_ref = self._resolve_reference(plugin_ref)
+                        if plugin_ref is not None:
                             plugins.append(plugin_ref)
-                            logger.debug("Using pre-resolved plugin: %s", plugin_ref)
-
-                logger.debug("Final plugins list: %s", plugins)
+                    else:
+                        plugins.append(plugin_ref)
                 processed_config["plugins"] = plugins
 
-            # Interpolate any other values in the agent config
+            # Interpolate any remaining top-level agent attributes
             for key, value in list(processed_config.items()):
                 if key not in ["model", "plugins"]:
                     processed_config[key] = self._interpolate_value(value)
@@ -536,26 +391,141 @@ class HCLConfigLoader:
         logger.debug("Processed agents: %s", self.agents)
 
     def load_config(self) -> Dict[str, Any]:
-        """Load and process all HCL files in the configuration directory"""
-        # Find all .hcl files in the directory
-        hcl_files = glob(os.path.join(self.config_dir, "*.hcl"))
-        if not hcl_files:
-            raise FileNotFoundError(
-                f"No HCL configuration files found in {self.config_dir}"
-            )
+        """Load and merge all HCL files in the directory, then validate them all."""
+        all_errors = []
+        raw_configs = []
 
-        logger.debug("Found HCL files: %s", hcl_files)
+        # Find all .hcl files
+        hcl_files = list(self.config_dir.glob("*.hcl"))
+        logger.debug("Found HCL files: %s", [str(f) for f in hcl_files])
 
-        # Load and merge all configurations
-        for file_path in hcl_files:
-            config = self._load_hcl_file(file_path)
-            self._merge_config(config)
+        # First load & validate each raw file
+        for hcl_file in hcl_files:
+            file_errors = []
+            logger.debug("Loading HCL file: %s", hcl_file)
+            with open(hcl_file) as f:
+                raw_config = hcl2.load(f)
+                logger.debug("Raw HCL content: %s", raw_config)
+                raw_configs.append(raw_config)
 
-        # Process all configuration blocks in order
+                # Validate raw config using the schema
+                validator = SchemaValidator()
+
+                # Validate runtime blocks
+                if "runtime" in raw_config:
+                    for block_instance in raw_config["runtime"]:
+                        errors = validator.validate_config(block_instance, "runtime")
+                        if errors:
+                            file_errors.append("In runtime block:")
+                            file_errors.extend(f"  - {err}" for err in errors)
+
+                # Validate variable blocks
+                if "variable" in raw_config:
+                    for block_instance in raw_config["variable"]:
+                        for label, block_content in block_instance.items():
+                            errors = validator.validate_config(
+                                block_content, "variable"
+                            )
+                            if errors:
+                                file_errors.append(f"In variable '{label}':")
+                                file_errors.extend(f"  - {err}" for err in errors)
+
+                # Validate model blocks
+                if "model" in raw_config:
+                    for block_instance in raw_config["model"]:
+                        for label, block_content in block_instance.items():
+                            errors = validator.validate_config(block_content, "model")
+                            if errors:
+                                file_errors.append(f"In model '{label}':")
+                                file_errors.extend(f"  - {err}" for err in errors)
+
+                # Validate plugin blocks
+                if "plugin" in raw_config:
+                    for block_instance in raw_config["plugin"]:
+                        for plugin_type, inner_block in block_instance.items():
+                            for plugin_name, block_content in inner_block.items():
+                                errors = validator.validate_config(
+                                    block_content, "plugin"
+                                )
+                                if errors:
+                                    file_errors.append(
+                                        f"In plugin '{plugin_type}:{plugin_name}':"
+                                    )
+                                    file_errors.extend(f"  - {err}" for err in errors)
+
+                # Validate agent blocks
+                if "agent" in raw_config:
+                    for block_instance in raw_config["agent"]:
+                        for label, block_content in block_instance.items():
+                            # Create a copy for validation
+                            validation_content = dict(block_content)
+
+                            # For model references, keep the field but skip inline validation
+                            if "model" in validation_content:
+                                model_value = validation_content["model"]
+                                if isinstance(model_value, dict):
+                                    # Only validate if it's an inline definition
+                                    model_errors = validator.validate_config(
+                                        model_value, "model"
+                                    )
+                                    if model_errors:
+                                        file_errors.append(f"In agent '{label}' model:")
+                                        file_errors.extend(
+                                            f"  - {err}" for err in model_errors
+                                        )
+
+                            # For plugin references, keep the field but skip inline validation
+                            if "plugins" in validation_content:
+                                plugins = validation_content["plugins"]
+                                if isinstance(plugins, list):
+                                    for i, plugin in enumerate(plugins):
+                                        if isinstance(plugin, dict):
+                                            plugin_errors = validator.validate_config(
+                                                plugin, "plugin"
+                                            )
+                                            if plugin_errors:
+                                                file_errors.append(
+                                                    f"In agent '{label}' plugin[{i}]:"
+                                                )
+                                                file_errors.extend(
+                                                    f"  - {err}"
+                                                    for err in plugin_errors
+                                                )
+
+                            # Validate the agent block itself
+                            errors = validator.validate_config(
+                                validation_content, "agent"
+                            )
+                            if errors:
+                                file_errors.append(f"In agent '{label}':")
+                                file_errors.extend(f"  - {err}" for err in errors)
+
+            # If we have errors in this file, record them
+            if file_errors:
+                all_errors.append(f"In file {hcl_file.name}:")
+                all_errors.extend(f"  {error}" for error in file_errors)
+                all_errors.append("")  # blank line
+
+        # If we have any validation errors across any file, raise them all
+        if all_errors:
+            error_msg = "Configuration validation failed:\n\n"
+            error_msg += "\n".join(all_errors)
+            raise RuntimeError(error_msg)
+
+        # If validation succeeded, merge configs
+        for raw_config in raw_configs:
+            self._merge_config(raw_config)
+
+        # After merging, do further processing (not schema errors but typed references, etc.)
         self._process_variables()
         self._process_models()
         self._process_plugins()
         self._process_agents()
 
-        # Return the processed agent configurations
-        return self.agents
+        return {
+            "runtime": self.runtime,
+            "variable": self.variables,
+            "model": self.models,
+            "plugin": self.plugins,
+            "agent": self.agents,
+        }

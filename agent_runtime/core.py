@@ -1,4 +1,5 @@
 # agent_runtime/core.py
+
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List, AsyncIterator
@@ -6,11 +7,10 @@ from typing import Dict, Any, Optional, List, AsyncIterator
 import click
 from semantic_kernel import Kernel
 
-from agent_runtime.config.hcl_loader import HCLConfigLoader
-from agent_runtime.plugins.manager import PluginManager, PluginConfig
-from agent_runtime.agent import Agent
-from agent_runtime.validation import validate_agent_config
-from agent_runtime.cli.output import Style
+from .config.hcl_loader import HCLConfigLoader
+from .plugins.manager import PluginConfig, PluginManager
+from .agent import Agent
+from .cli.output import Style
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +21,11 @@ async def _chat_loop(agent: Agent) -> AsyncIterator[str]:
     This is an internal helper for interactive modes or headless piping.
     """
     while True:
-        # You could read from sys.stdin or do something else in a truly headless mode
         user_input = input("\nYou > ")
         if user_input.lower() in ["exit", "quit"]:
             logger.debug("User requested exit.")
             break
 
-        # Produce agent response in streaming chunks
         print("\nAgent > ", end="", flush=True)
         try:
             async for chunk in agent.chat(user_input):
@@ -40,23 +38,21 @@ async def _chat_loop(agent: Agent) -> AsyncIterator[str]:
 
 def load_and_validate_config(config_dir: Path) -> Dict[str, Any]:
     """
-    Load HCL configs from the directory and perform validation checks.
+    Load HCL configs from the directory and perform all validation checks.
     Returns the final dictionary of agent configurations.
     Raises exceptions if invalid or missing.
     """
     loader = HCLConfigLoader(str(config_dir))
     try:
-        agent_configs = loader.load_config()
+        config = loader.load_config()
     except Exception as e:
+        # We re-raise as a RuntimeError so that the CLI can display them nicely.
         raise RuntimeError(f"Error loading configuration: {e}")
 
-    if not agent_configs:
-        raise RuntimeError("No agent configurations found in HCL files.")
+    if not config:
+        raise RuntimeError("No configurations found in HCL files.")
 
-    # Optionally run extra validation logic
-    # E.g. validate_agent_config(agent_configs) if you want JSON schema checks
-    # For now we skip or do minimal checks.
-    return agent_configs
+    return config
 
 
 def collect_plugins_for_agents(
@@ -78,13 +74,11 @@ def collect_plugins_for_agents(
     for name, cfg in selected_agents.items():
         plugins = cfg.get("plugins", [])
         for plugin_def in plugins:
-            if (
-                not isinstance(plugin_def, dict)
-                or "type" not in plugin_def
-                or "source" not in plugin_def
-                or "name" not in plugin_def
-            ):
-                logger.warning("Skipping invalid plugin definition: %s", plugin_def)
+            # plugin_def should be a dictionary with keys: type, name, source, version, etc.
+            if not isinstance(plugin_def, dict):
+                logger.warning(
+                    "Invalid plugin reference in agent '%s': %s", name, plugin_def
+                )
                 continue
             pc = PluginConfig(
                 plugin_type=plugin_def["type"],
@@ -104,7 +98,10 @@ def init_plugins(config_dir: Path, agent_name: Optional[str] = None) -> None:
     and update the global lockfile. If agent_name is specified,
     only that agent's plugins are installed. Otherwise, all are installed.
     """
-    agent_configs = load_and_validate_config(config_dir)
+    from .plugins.manager import PluginManager
+
+    config = load_and_validate_config(config_dir)
+    agent_configs = config["agent"]
     plugin_list = collect_plugins_for_agents(agent_configs, agent_name)
 
     if not plugin_list:
@@ -114,7 +111,7 @@ def init_plugins(config_dir: Path, agent_name: Optional[str] = None) -> None:
     kernel = Kernel()
     pm = PluginManager(config_dir, kernel)
 
-    # Compare with existing lock; if up-to-date, just load
+    # Compare with existing lock
     pm.plugin_configs.clear()
     for pc in plugin_list:
         pm.plugin_configs[pc.scoped_name] = pc
@@ -128,7 +125,6 @@ def init_plugins(config_dir: Path, agent_name: Optional[str] = None) -> None:
         click.echo(Style.success("All plugins loaded from local cache."))
         return
 
-    # Otherwise, install
     click.echo(Style.header("Installing plugins..."))
     pm.install_and_load_plugins(plugin_list, force_reinstall=False)
     click.echo(Style.success("Plugins installed successfully; lockfile updated."))
@@ -139,9 +135,12 @@ def run_agent_interactive(config_dir: Path, agent_name: Optional[str] = None) ->
     The 'run' step: load config, check lockfile, run chat in an interactive loop.
     If multiple agents exist and agent_name is None, picks the first.
     """
-    agent_configs = load_and_validate_config(config_dir)
+    from .plugins.manager import PluginManager
 
-    # If multiple agents and user didn't pick one, pick the first by default
+    config = load_and_validate_config(config_dir)
+    agent_configs = config["agent"]
+
+    # If multiple agents and user didn't pick one, pick the first
     if not agent_name:
         if len(agent_configs) > 1:
             raise ValueError(
@@ -152,23 +151,20 @@ def run_agent_interactive(config_dir: Path, agent_name: Optional[str] = None) ->
     if agent_name not in agent_configs:
         raise ValueError(f"Agent '{agent_name}' not found in configuration.")
 
-    # Build the PluginManager & plugin configs
     agent_cfg = agent_configs[agent_name]
     plugin_list = collect_plugins_for_agents({agent_name: agent_cfg}, agent_name)
+
     kernel = Kernel()
     pm = PluginManager(config_dir, kernel)
-
-    # Register plugin configs
     for pc in plugin_list:
         pm.plugin_configs[pc.scoped_name] = pc
 
-    # Check lockfile for mismatches if we have remote plugins
+    # Check lockfile for remote plugins
     github_plugins = [p for p in plugin_list if p.is_github_source]
     if github_plugins:
         lockfile = config_dir / "plugins.lock.json"
         if not lockfile.exists():
             raise RuntimeError("No lockfile found. Please run 'init' first.")
-
         lock_data = pm.read_lockfile(lockfile)
         if not pm.compare_with_lock(plugin_list, lock_data):
             raise RuntimeError(
@@ -181,7 +177,7 @@ def run_agent_interactive(config_dir: Path, agent_name: Optional[str] = None) ->
         git_ref = cfg_item.git_ref if cfg_item.is_github_source else None
         pm.load_plugin(cfg_item.scoped_name, git_ref)
 
-    # Create the agent
+    # Create the Agent
     agent = Agent.from_config(agent_cfg, base_dir=config_dir, skip_init=True)
     agent.kernel = kernel
 
@@ -190,7 +186,6 @@ def run_agent_interactive(config_dir: Path, agent_name: Optional[str] = None) ->
     click.echo(Style.info("Type 'reset' to start a new conversation."))
     click.echo("----------")
 
-    # Start the interactive chat loop
     import asyncio
 
     async def _interactive():
@@ -217,13 +212,3 @@ def run_agent_interactive(config_dir: Path, agent_name: Optional[str] = None) ->
             print("\n")
 
     asyncio.run(_interactive())
-
-
-def validate_configs_headless(config_dir: Path) -> None:
-    """
-    Simple 'validate' check without needing a full CLI prompt.
-    Throws exception if validation fails.
-    """
-    # If you had a JSON schema or other checks, you could expand it here.
-    load_and_validate_config(config_dir)
-    # (Optional) do more checks or a separate schema validate

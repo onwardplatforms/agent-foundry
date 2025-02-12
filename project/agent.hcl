@@ -17,7 +17,7 @@ variable "model_max_tokens" {
 model "llama2_instance" {
   provider = "ollama"
   name     = "llama2"
-  settings = {
+  settings {
     temperature = var.model_temperature
     max_tokens  = var.model_max_tokens
   }

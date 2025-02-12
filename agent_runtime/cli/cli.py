@@ -10,7 +10,7 @@ import click
 from dotenv import load_dotenv
 
 from agent_runtime.core import (
-    validate_configs_headless,
+    load_and_validate_config,
     init_plugins,
     run_agent_interactive,
 )
@@ -71,10 +71,10 @@ def validate(dir: Path) -> None:
 
     try:
         click.echo(Style.header("Validating configuration..."))
-        validate_configs_headless(dir)
+        load_and_validate_config(dir)
         click.echo(Style.success("Configuration is valid."))
     except Exception as e:
-        click.echo(Style.error(f"Configuration validation failed: {e}"))
+        click.echo(Style.error(str(e)))
         raise SystemExit(1)
 
 
