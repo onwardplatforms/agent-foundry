@@ -53,6 +53,5 @@ coverage.xml
 
 # Logs
 *.log
-
 # Project specific
 .plugins/

@@ -187,6 +187,7 @@ def run_agent_interactive(config_dir: Path, agent_name: Optional[str] = None) ->
 
     click.echo(Style.success(f"Agent '{agent_cfg['name']}' is ready."))
     click.echo(Style.info("Type 'exit' or 'quit' to end the session."))
+    click.echo(Style.info("Type 'reset' to start a new conversation."))
     click.echo("----------")
 
     # Start the interactive chat loop
@@ -198,8 +199,14 @@ def run_agent_interactive(config_dir: Path, agent_name: Optional[str] = None) ->
                 msg = input("\nYou > ")
             except EOFError:
                 break
+
             if msg.lower() in ["exit", "quit"]:
                 break
+            elif msg.lower() == "reset":
+                agent.start_new_session()
+                click.echo(Style.info("Started new conversation"))
+                continue
+
             print("\nAgent > ", end="")
             try:
                 async for chunk in agent.chat(msg):

@@ -36,10 +36,6 @@ class Agent:
         self.system_prompt = system_prompt
         self.logger = logging.getLogger("agent_runtime")
 
-        # Initialize chat history
-        self.chat_history = ChatHistory()
-        self.chat_history.add_system_message(system_prompt)
-
         # Initialize or use provided kernel
         self.kernel = kernel or Kernel()
         self.chat_service = self._setup_chat_service(model_config)
@@ -48,7 +44,25 @@ class Agent:
         # Store config
         self.model_config = model_config
         self.plugins_dir = plugins_dir
+
+        # Initialize chat history for the session
+        self._session_history = ChatHistory()
+        self._session_history.add_system_message(system_prompt)
+
         self.logger.debug("Agent '%s' initialized.", self.name)
+
+    def start_new_session(self) -> None:
+        """Start a new chat session with a fresh history."""
+        self._session_history = ChatHistory()
+        self._session_history.add_system_message(self.system_prompt)
+        self.logger.debug("Started new chat session for agent '%s'", self.name)
+        self.logger.debug("System prompt: %s", self.system_prompt)
+
+    def _log_chat_history(self, prefix: str = "") -> None:
+        """Log the current state of the chat history."""
+        self.logger.debug("%sChat history:", prefix)
+        for i, msg in enumerate(self._session_history.messages):
+            self.logger.debug("%s  [%d] %s: %s", prefix, i, msg.role, msg.content)
 
     def _setup_chat_service(
         self, model_config: Dict[str, Any]
@@ -154,7 +168,11 @@ class Agent:
             Chat message content chunks as they are generated
         """
         self.logger.debug("Agent '%s' received message: %s", self.name, message)
-        self.chat_history.add_user_message(message)
+        self._log_chat_history("Before adding message: ")
+
+        # Add the user's message to the session history
+        self._session_history.add_user_message(message)
+        self._log_chat_history("After adding message: ")
 
         # List plugin functions
         for pname, plugin in self.kernel.plugins.items():
@@ -179,19 +197,24 @@ class Agent:
 
                     try:
                         result = await func.invoke(kernel=self.kernel, arguments=args)
-                        yield StreamingChatMessageContent(
+                        response = StreamingChatMessageContent(
                             role=AuthorRole.ASSISTANT,
                             content=str(result),
                             choice_index=0,
                         )
-                        self.chat_history.add_assistant_message(str(result))
+                        yield response
+                        self._session_history.add_assistant_message(str(result))
+                        self._log_chat_history("After plugin response: ")
                         return
                     except Exception as e:
                         err_msg = f"Function '{fname}' failed: {e}"
                         self.logger.error(err_msg)
-                        yield StreamingChatMessageContent(
+                        response = StreamingChatMessageContent(
                             role=AuthorRole.ASSISTANT, content=err_msg, choice_index=0
                         )
+                        yield response
+                        self._session_history.add_assistant_message(err_msg)
+                        self._log_chat_history("After plugin error: ")
                         return
 
         # Fallback to chat model
@@ -205,14 +228,19 @@ class Agent:
             max_tokens=settings.get("max_tokens"),
         )
 
-        last_chunk = None
+        # Accumulate the full response
+        full_response = []
+        self.logger.debug("Sending chat history to model:")
+        self._log_chat_history("  ")
         async for chunk in self.chat_service.get_streaming_chat_message_content(
-            chat_history=self.chat_history,
+            chat_history=self._session_history,
             settings=exec_settings,
         ):
             if chunk:
+                full_response.append(chunk.content)
                 yield chunk
-                last_chunk = chunk
 
-        if last_chunk:
-            self.chat_history.add_assistant_message(last_chunk.content)
+        if full_response:
+            complete_response = "".join(full_response)
+            self._session_history.add_assistant_message(complete_response)
+            self._log_chat_history("After model response: ")
