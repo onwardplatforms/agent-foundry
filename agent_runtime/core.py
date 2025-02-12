@@ -42,7 +42,7 @@ def load_and_validate_config(config_dir: Path) -> Dict[str, Any]:
     Returns the final dictionary of configurations including runtime, variables, models, plugins, and agents.
     Raises exceptions if invalid or missing.
     """
-    loader = HCLConfigLoader(str(config_dir))
+    loader = HCLConfigLoader(config_dir)
     try:
         config = loader.load_config()
     except Exception as e:

@@ -14,8 +14,20 @@ variable "model_max_tokens" {
   default     = 1000
 }
 
+variable "signature" {
+  description = "Signature to use for messages"
+  type        = string
+  default     = "From Variable"
+}
+
+variable "provider" {
+  description = "Provider to use for the model"
+  type = string
+  default = "ollama"
+}
+
 model "llama2_instance" {
-  provider = "ollama"
+  provider = var.provider
   name     = "llama2"
   settings {
     temperature = var.model_temperature
@@ -25,7 +37,9 @@ model "llama2_instance" {
 
 plugin "local" "echo" {
   source = "./local_plugins/echo"
-  variables = {}
+  variables = {
+    "signature" = var.signature
+  }
 }
 
 plugin "remote" "echo" {
