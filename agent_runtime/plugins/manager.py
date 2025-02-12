@@ -434,6 +434,9 @@ class PluginManager:
 
         plugin_config = self.plugin_configs[name]
 
+        # Set plugin variables before loading the module
+        self._set_plugin_vars(plugin_config)
+
         if plugin_config.is_github_source:
             parts = plugin_config._parse_github_source()
             version = git_ref if git_ref else plugin_config.version
