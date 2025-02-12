@@ -183,7 +183,7 @@ class ValueInterpolator:
                 )
             # Return just the default value from the variable definition
             if isinstance(var_def, dict):
-                return var_def.get("default")
+                return var_def.get("default", "")
             return var_def
 
         elif ref_type == "model" and len(parts) == 2:
@@ -306,10 +306,16 @@ class BlockProcessor:
                     f"Remote plugin {plugin_name} is missing required 'version' field"
                 )
 
-        # Ensure variables exists
+        # Ensure variables exists and interpolate them
         if "variables" not in processed_config:
             processed_config["variables"] = {}
         processed_config["variables"]["name"] = plugin_name
+
+        # Interpolate all variable values
+        if processed_config["variables"]:
+            processed_config["variables"] = self.interpolator.interpolate(
+                processed_config["variables"], ["plugin", plugin_key, "variables"]
+            )
 
         logger.debug("Final plugin config for '%s': %s", plugin_key, processed_config)
         return processed_config
@@ -480,7 +486,10 @@ class HCLConfigLoader:
         processed_vars = {}
         for var_name, var_config in self.variables.items():
             # Variables should already be type-converted from merge
-            processed_vars[var_name] = var_config.get("default")
+            if isinstance(var_config, dict):
+                processed_vars[var_name] = var_config.get("default", "")
+            else:
+                processed_vars[var_name] = var_config
         logger.debug("Processed variables: %s", processed_vars)
         self.variables = processed_vars
 
@@ -647,7 +656,11 @@ class HCLConfigLoader:
         ref_type = parts[0]
 
         if ref_type == "var" and len(parts) == 2:
-            result = self.variables.get(parts[1])
+            var_name = parts[1]
+            result = self.variables.get(var_name)
+            if result is None:
+                logger.warning("Variable '%s' not found", var_name)
+                return ""
             return result
 
         elif ref_type == "model" and len(parts) == 2:

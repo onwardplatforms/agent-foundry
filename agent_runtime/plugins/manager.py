@@ -237,17 +237,42 @@ class PluginManager:
     def _set_plugin_vars(self, cfg: PluginConfig) -> None:
         """Set plugin variables in env with AGENT_VAR_ prefix."""
         for k, v in cfg.variables.items():
-            if v.startswith("$"):
-                env_name = v[1:]
-                resolved = os.getenv(env_name, "")
-                if not resolved:
-                    self.logger.warning(
-                        "Env var '%s' not found for plugin var '%s'.", env_name, k
+            # Handle environment variable references ($ENV_VAR)
+            if isinstance(v, str):
+                if v.startswith("$"):
+                    # Handle environment variable references ($ENV_VAR)
+                    env_name = v[1:]
+                    resolved = os.getenv(env_name, "")
+                    if not resolved:
+                        self.logger.warning(
+                            "Env var '%s' not found for plugin var '%s'.", env_name, k
+                        )
+                    key = f"AGENT_VAR_{k.upper()}"
+                    os.environ[key] = resolved
+                    self.logger.debug(
+                        "Set %s=%s (plugin '%s')", key, resolved, cfg.name
                     )
-                v = resolved
-            key = f"AGENT_VAR_{k.upper()}"
-            os.environ[key] = v
-            self.logger.debug("Set %s=%s (plugin '%s')", key, v, cfg.name)
+                elif v.startswith("${") and v.endswith("}"):
+                    # Handle HCL variable references (${var.x})
+                    # The value should already be interpolated by the HCL loader
+                    self.logger.warning(
+                        "Variable '%s' not interpolated by HCL loader: %s", k, v
+                    )
+                    key = f"AGENT_VAR_{k.upper()}"
+                    os.environ[key] = ""
+                    self.logger.debug("Set %s=%s (plugin '%s')", key, "", cfg.name)
+                else:
+                    # Direct string value
+                    key = f"AGENT_VAR_{k.upper()}"
+                    os.environ[key] = v
+                    self.logger.debug("Set %s=%s (plugin '%s')", key, v, cfg.name)
+            else:
+                # Non-string value
+                key = f"AGENT_VAR_{k.upper()}"
+                if v is None:
+                    v = ""
+                os.environ[key] = str(v)
+                self.logger.debug("Set %s=%s (plugin '%s')", key, v, cfg.name)
 
     def _clone_github_plugin(self, cfg: PluginConfig) -> None:
         """Clone a plugin from GitHub."""

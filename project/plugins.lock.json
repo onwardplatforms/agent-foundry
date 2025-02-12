@@ -5,7 +5,7 @@
       "scoped_name": "@local/echo",
       "source": "./local_plugins/echo",
       "type": "local",
-      "sha": "e43e779199b355785cd13775aeed6cc2c9a3567763b556a467be821e876faf5f"
+      "sha": "37bb8b6f421abb31210c2d9d0a6c6005ef0f9654caa954b7193192b9edf8b83e"
     },
     {
       "name": "echo",

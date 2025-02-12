@@ -25,9 +25,7 @@ model "llama2_instance" {
 
 plugin "local" "echo" {
   source = "./local_plugins/echo"
-  variables = {
-    "signature" = "Hello"
-  }
+  variables = {}
 }
 
 plugin "remote" "echo" {
