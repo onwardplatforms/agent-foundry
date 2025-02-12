@@ -261,7 +261,7 @@ class PluginManager:
         if version_dir.exists():
             shutil.rmtree(version_dir)
 
-        self.logger.info(
+        self.logger.debug(
             "Cloning plugin '%s' from '%s' at version '%s'",
             cfg.name,
             parts["clone_url"],
@@ -518,7 +518,6 @@ class PluginManager:
         self, configs: List[PluginConfig], force_reinstall: bool = False
     ) -> None:
         """Install and load multiple plugins."""
-        cli_message("\nInitializing plugins...", Colors.BLUE, bold=True)
         self.logger.debug(
             "Installing/loading %d plugins (force=%s)...", len(configs), force_reinstall
         )
@@ -535,20 +534,22 @@ class PluginManager:
                 self.load_plugin(
                     cfg.scoped_name, cfg.version if cfg.is_github_source else None
                 )
-            cli_message("\nAll plugins are up to date", Colors.GREEN, bold=True)
+            click.echo(Style.success("All plugins are up to date"))
             return
+
+        click.echo(Style.header("\nInitializing plugins..."))
 
         # Separate local/remote
         local_configs = [c for c in configs if c.is_local_source]
         remote_configs = [c for c in configs if c.is_github_source]
 
         if local_configs:
-            cli_message("\nLocal plugins:", Colors.BLUE)
+            click.echo(Style.info("\nLocal plugins:"))
             for cfg in local_configs:
                 self.install_plugin(cfg, force_reinstall)
 
         if remote_configs:
-            cli_message("\nRemote plugins:", Colors.BLUE)
+            click.echo(Style.info("\nRemote plugins:"))
             for cfg in remote_configs:
                 self.install_plugin(cfg, force_reinstall)
 
@@ -562,12 +563,13 @@ class PluginManager:
         new_data = self.create_lock_data()
         self.write_lockfile(self.base_dir / "plugins.lock.json", new_data)
         self.logger.debug("Lockfile updated: %s", "plugins.lock.json")
-        cli_message("\nInitialization complete", Colors.GREEN, bold=True)
+        click.echo(Style.success("\nInitialization complete"))
 
     def create_lock_data(self) -> Dict[str, Any]:
         """Create lock data for all installed plugins."""
         plugins_data = []
 
+        # Only include plugins that are in the current configuration
         for scoped_name, cfg in self.plugin_configs.items():
             plugin_data = {
                 "name": cfg.name,
@@ -596,7 +598,7 @@ class PluginManager:
     def compare_with_lock(
         self, plugins: List[PluginConfig], lock_data: Optional[Dict[str, Any]] = None
     ) -> bool:
-        """Compare current (subset) plugins with the global lockfile."""
+        """Compare current plugins with the global lockfile."""
         if lock_data is None:
             lock_path = self.base_dir / "plugins.lock.json"
             if not lock_path.exists():
@@ -605,23 +607,26 @@ class PluginManager:
             lock_data = self.read_lockfile(lock_path)
 
         self.logger.debug("Comparing plugins with lock data: %s", lock_data)
-        current_scoped_names = [p.scoped_name for p in plugins]
+        current_scoped_names = set(p.scoped_name for p in plugins)
         self.logger.debug("Current plugins: %s", current_scoped_names)
 
         locked_map = {p["scoped_name"]: p for p in lock_data.get("plugins", [])}
         locked_scoped_names = set(locked_map.keys())
         self.logger.debug("Locked plugins: %s", list(locked_scoped_names))
 
-        # Subset check: ensure all current plugins exist in the lockfile
-        needed = set(p.scoped_name for p in plugins)
-        missing_in_lock = needed - locked_scoped_names
-        if missing_in_lock:
-            self.logger.debug(
-                "Some plugins aren't in the lockfile: %s", missing_in_lock
-            )
+        # Check for plugins that have been removed from configuration
+        removed_plugins = locked_scoped_names - current_scoped_names
+        if removed_plugins:
+            self.logger.debug("Plugins have been removed: %s", removed_plugins)
             return False
 
-        # For each plugin, check source/type/sha
+        # Check for plugins that have been added to configuration
+        added_plugins = current_scoped_names - locked_scoped_names
+        if added_plugins:
+            self.logger.debug("New plugins need to be added: %s", added_plugins)
+            return False
+
+        # For each plugin, check source and type
         for cfg in plugins:
             locked = locked_map[cfg.scoped_name]
 

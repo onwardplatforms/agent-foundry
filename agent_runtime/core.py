@@ -39,7 +39,7 @@ async def _chat_loop(agent: Agent) -> AsyncIterator[str]:
 def load_and_validate_config(config_dir: Path) -> Dict[str, Any]:
     """
     Load HCL configs from the directory and perform all validation checks.
-    Returns the final dictionary of agent configurations.
+    Returns the final dictionary of configurations including runtime, variables, models, plugins, and agents.
     Raises exceptions if invalid or missing.
     """
     loader = HCLConfigLoader(str(config_dir))
@@ -62,34 +62,22 @@ def collect_plugins_for_agents(
     Given all agent configs (from load_and_validate_config),
     return a list of all PluginConfig objects for either a single agent or all.
     """
-    selected_agents = {}
-    if agent_name:
-        if agent_name not in agent_configs:
-            raise ValueError(f"Agent '{agent_name}' not found in configuration.")
-        selected_agents[agent_name] = agent_configs[agent_name]
-    else:
-        selected_agents = agent_configs
+    all_plugins = {}
 
-    all_plugins = []
-    for name, cfg in selected_agents.items():
-        plugins = cfg.get("plugins", [])
-        for plugin_def in plugins:
-            # plugin_def should be a dictionary with keys: type, name, source, version, etc.
-            if not isinstance(plugin_def, dict):
-                logger.warning(
-                    "Invalid plugin reference in agent '%s': %s", name, plugin_def
-                )
-                continue
-            pc = PluginConfig(
-                plugin_type=plugin_def["type"],
-                name=plugin_def["name"],
-                source=plugin_def["source"],
-                version=plugin_def.get("version"),
-                variables=plugin_def.get("variables", {}),
-            )
-            all_plugins.append(pc)
+    # First collect all plugins from the raw configuration
+    raw_plugins = agent_configs.get("plugin", {})
+    for plugin_key, plugin_def in raw_plugins.items():
+        plugin_type, plugin_name = plugin_key.split(":")
+        pc = PluginConfig(
+            plugin_type=plugin_type,
+            name=plugin_name,
+            source=plugin_def["source"],
+            version=plugin_def.get("version"),
+            variables=plugin_def.get("variables", {}),
+        )
+        all_plugins[plugin_key] = pc
 
-    return all_plugins
+    return list(all_plugins.values())
 
 
 def init_plugins(config_dir: Path, agent_name: Optional[str] = None) -> None:
@@ -101,11 +89,14 @@ def init_plugins(config_dir: Path, agent_name: Optional[str] = None) -> None:
     from .plugins.manager import PluginManager
 
     config = load_and_validate_config(config_dir)
-    agent_configs = config["agent"]
-    plugin_list = collect_plugins_for_agents(agent_configs, agent_name)
+    plugin_list = collect_plugins_for_agents(config, agent_name)
 
     if not plugin_list:
         click.echo(Style.info("No plugins found. Nothing to do."))
+        # Even with no plugins, we should update the lockfile to remove any previously locked plugins
+        pm = PluginManager(config_dir, Kernel())
+        new_data = pm.create_lock_data()
+        pm.write_lockfile(config_dir / "plugins.lock.json", new_data)
         return
 
     kernel = Kernel()
@@ -125,7 +116,6 @@ def init_plugins(config_dir: Path, agent_name: Optional[str] = None) -> None:
         click.echo(Style.success("All plugins loaded from local cache."))
         return
 
-    click.echo(Style.header("Installing plugins..."))
     pm.install_and_load_plugins(plugin_list, force_reinstall=False)
     click.echo(Style.success("Plugins installed successfully; lockfile updated."))
 
@@ -152,10 +142,13 @@ def run_agent_interactive(config_dir: Path, agent_name: Optional[str] = None) ->
         raise ValueError(f"Agent '{agent_name}' not found in configuration.")
 
     agent_cfg = agent_configs[agent_name]
-    plugin_list = collect_plugins_for_agents({agent_name: agent_cfg}, agent_name)
+    plugin_list = collect_plugins_for_agents(config, agent_name)
 
     kernel = Kernel()
     pm = PluginManager(config_dir, kernel)
+
+    # Compare with existing lock
+    pm.plugin_configs.clear()
     for pc in plugin_list:
         pm.plugin_configs[pc.scoped_name] = pc
 
@@ -177,7 +170,7 @@ def run_agent_interactive(config_dir: Path, agent_name: Optional[str] = None) ->
         git_ref = cfg_item.git_ref if cfg_item.is_github_source else None
         pm.load_plugin(cfg_item.scoped_name, git_ref)
 
-    # Create the Agent
+    # Create the Agent with our kernel that has the plugins loaded
     agent = Agent.from_config(agent_cfg, base_dir=config_dir, skip_init=True)
     agent.kernel = kernel
 

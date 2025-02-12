@@ -220,6 +220,13 @@ class Agent:
         # Fallback to chat model
         self.logger.debug("No function matched; using chat service for response.")
         settings = self.model_config.get("settings", {})
+        if isinstance(settings, list) and len(settings) == 1:
+            settings = settings[0]
+        if not isinstance(settings, dict):
+            settings = {}
+        if isinstance(settings, dict) and settings.get("_is_block", False):
+            del settings["_is_block"]
+
         exec_settings = PromptExecutionSettings(
             service_id=None,
             extension_data={},

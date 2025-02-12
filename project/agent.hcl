@@ -28,11 +28,11 @@ plugin "local" "echo" {
   variables = {}
 }
 
-# plugin "remote" "echo" {
-#   source = "onwardplatforms/echo"
-#   version = "0.0.1"
-#   variables = {}
-# }
+plugin "remote" "echo" {
+  source = "onwardplatforms/echo"
+  version = "0.0.1"
+  variables = {}
+}
 
 agent "local" {
   name           = "test-agent-local"
