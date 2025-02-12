@@ -2,7 +2,7 @@
 
 import os
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Union, Optional
 import hcl2
 from pathlib import Path
 import re
@@ -12,25 +12,361 @@ from ..validation import get_schema_validator, ValidationContext
 logger = logging.getLogger(__name__)
 
 
-class HCLConfigLoader:
-    def __init__(self, config_dir: str):
-        self.config_dir = Path(config_dir)
+class ConfigurationError(Exception):
+    """Base class for configuration-related errors."""
+
+    pass
+
+
+class InterpolationError(ConfigurationError):
+    """Error during value interpolation."""
+
+    def __init__(self, message: str, path: List[str]):
+        self.path = path
+        super().__init__(f"{' -> '.join(path)}: {message}")
+
+
+class ConversionError(ConfigurationError):
+    """Error during value type conversion."""
+
+    def __init__(self, value: Any, target_type: str, message: str):
+        super().__init__(f"Failed to convert '{value}' to {target_type}: {message}")
+
+
+class ValueConverter:
+    """Handles type conversion of configuration values."""
+
+    @staticmethod
+    def convert(value: Any, target_type: str) -> Any:
+        """Convert a value to the specified type."""
+        try:
+            return ValueConverter._convert_value(value, target_type)
+        except (ValueError, TypeError) as e:
+            raise ConversionError(value, target_type, str(e))
+
+    @staticmethod
+    def _convert_value(value: Any, target_type: str) -> Any:
+        """Internal conversion implementation."""
+        # If value is already the right type, return it
+        if target_type == "number" and isinstance(value, (int, float)):
+            return value
+        elif target_type == "float" and isinstance(value, float):
+            return value
+        elif target_type == "int" and isinstance(value, int):
+            return value
+        elif target_type == "bool" and isinstance(value, bool):
+            return value
+        elif target_type == "string" and isinstance(value, str):
+            return value
+
+        # Otherwise convert string values
+        if isinstance(value, str):
+            if target_type == "number":
+                try:
+                    if "." in value:
+                        return float(value)
+                    return int(value)
+                except (ValueError, TypeError):
+                    return float(value)
+            elif target_type == "float":
+                return float(value)
+            elif target_type == "int":
+                return int(value)
+            elif target_type == "bool":
+                return value.lower() in ("true", "1", "yes", "on")
+            elif target_type == "string":
+                return value
+
+        # For non-string values that don't match target type, convert through string
+        return ValueConverter._convert_value(str(value), target_type)
+
+
+class ValueInterpolator:
+    """Handles value interpolation and reference resolution."""
+
+    def __init__(
+        self, variables: Dict[str, Any], models: Dict[str, Any], plugins: Dict[str, Any]
+    ):
+        self.variables = variables
+        self.models = models
+        self.plugins = plugins
+        self._current_path: List[str] = []
+
+    def interpolate(self, value: Any, path: Optional[List[str]] = None) -> Any:
+        """Interpolate a value, including basic ternary conditionals and references."""
+        if path is not None:
+            self._current_path = path
+
+        try:
+            return self._interpolate_value(value)
+        except InterpolationError:
+            raise
+        except Exception as e:
+            raise InterpolationError(str(e), self._current_path)
+
+    def _interpolate_value(self, value: Any) -> Any:
+        """Internal interpolation implementation."""
+        if isinstance(value, str):
+            # 1) If there's a top-level ? and :, try ternary parse
+            if "?" in value and ":" in value and not value.startswith("${"):
+                new_val = self._evaluate_ternary(value)
+                if new_val != value:
+                    return new_val
+
+            # 2) Handle ${...} references
+            pattern = re.compile(r"\$\{([^}]+)\}")
+            result = value
+            while True:
+                match = pattern.search(result)
+                if not match:
+                    break
+                full_expr = match.group(0)  # '${...}'
+                inner_expr = match.group(1).strip()
+                # If there's a ? and :, attempt ternary
+                if "?" in inner_expr and ":" in inner_expr:
+                    sub_val = self._evaluate_ternary(inner_expr)
+                else:
+                    sub_val = self._basic_ref_interpolation(inner_expr)
+
+                if isinstance(sub_val, dict):
+                    return sub_val  # Return dict directly if needed
+
+                if not isinstance(sub_val, str):
+                    sub_val = str(sub_val)
+                start, end = match.span()
+                result = result[:start] + sub_val + result[end:]
+            return result
+
+        elif isinstance(value, dict):
+            return {k: self._interpolate_value(v) for k, v in value.items()}
+        elif isinstance(value, list):
+            return [self._interpolate_value(v) for v in value]
+        return value
+
+    def _evaluate_ternary(self, expr: str) -> Any:
+        """Evaluate a ternary expression."""
+        pattern = re.compile(r"^(.*?)\?(.*?)\:(.*)$")
+        m = pattern.match(expr.strip())
+        if not m:
+            return expr
+
+        condition_part = m.group(1).strip()
+        true_part = m.group(2).strip()
+        false_part = m.group(3).strip()
+
+        # Evaluate condition
+        cond_str = str(self._interpolate_value(condition_part))
+
+        try:
+            # Block builtins for safety
+            result_bool = eval(cond_str, {"__builtins__": None}, {})
+        except Exception as e:
+            logger.debug(f"Failed to evaluate condition '{cond_str}': {e}")
+            result_bool = False
+
+        chosen_str = true_part if result_bool else false_part
+        return self._interpolate_value(chosen_str)
+
+    def _basic_ref_interpolation(self, expr: str) -> Any:
+        """Handle basic references like var.x, model.y, plugin.z."""
+        parts = expr.split(".")
+        if len(parts) < 2:
+            return expr
+
+        ref_type = parts[0]
+        if ref_type == "var" and len(parts) == 2:
+            var_name = parts[1]
+            var_def = self.variables.get(var_name)
+            if var_def is None:
+                raise InterpolationError(
+                    f"Variable '{var_name}' not found", self._current_path
+                )
+            # Return just the default value from the variable definition
+            if isinstance(var_def, dict):
+                return var_def.get("default")
+            return var_def
+
+        elif ref_type == "model" and len(parts) == 2:
+            model_name = parts[1]
+            result = self.models.get(model_name)
+            if result is None:
+                raise InterpolationError(
+                    f"Model '{model_name}' not found", self._current_path
+                )
+            return result
+
+        elif ref_type == "plugin" and len(parts) == 3:
+            plugin_type, plugin_name = parts[1:]
+            plugin_key = f"{plugin_type}:{plugin_name}"
+            result = self.plugins.get(plugin_key)
+            if result is None:
+                raise InterpolationError(
+                    f"Plugin '{plugin_key}' not found", self._current_path
+                )
+            return result
+
+        return expr
+
+
+class BlockProcessor:
+    """Handles processing of specific block types."""
+
+    def __init__(self, interpolator: ValueInterpolator):
+        self.interpolator = interpolator
+
+    def process_model(
+        self, model_name: str, model_config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Process a model block configuration."""
+        logger.debug("Processing model '%s': %s", model_name, model_config)
+        processed_config = dict(model_config)  # copy
+
+        # Replace variable references in settings if any
+        if "settings" in processed_config:
+            settings = self.interpolator.interpolate(
+                processed_config["settings"], ["model", model_name, "settings"]
+            )
+            logger.debug("Interpolated settings: %s", settings)
+
+            # If settings is a list with one item (HCL block syntax), extract the item
+            if isinstance(settings, list) and len(settings) == 1:
+                settings = settings[0]
+
+            # Mark settings as a block if it came from HCL block syntax
+            if isinstance(settings, dict) and settings.get("_is_block", False):
+                del settings["_is_block"]
+
+            setting_types = {
+                "temperature": "float",
+                "max_tokens": "int",
+                "top_p": "float",
+                "frequency_penalty": "float",
+                "presence_penalty": "float",
+                "top_k": "int",
+                "repeat_penalty": "float",
+                "stop": "string",
+            }
+
+            if isinstance(settings, dict):
+                for key, value in settings.items():
+                    if key in setting_types:
+                        original = settings[key]
+                        settings[key] = ValueConverter.convert(
+                            value, setting_types[key]
+                        )
+                        logger.debug(
+                            "Converted setting %s: %s => %s",
+                            key,
+                            original,
+                            settings[key],
+                        )
+
+            processed_config["settings"] = settings
+
+        # Ensure required fields
+        if "provider" not in processed_config:
+            logger.error("Model '%s' missing required 'provider' field", model_name)
+        if "name" not in processed_config:
+            logger.error("Model '%s' missing required 'name' field", model_name)
+
+        logger.debug("Final model config for '%s': %s", model_name, processed_config)
+        return processed_config
+
+    def process_plugin(
+        self, plugin_key: str, plugin_config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Process a plugin block configuration."""
+        logger.debug("Processing plugin '%s': %s", plugin_key, plugin_config)
+        processed_config = dict(plugin_config)  # copy
+
+        # Basic checks
+        if "source" not in processed_config:
+            raise ConfigurationError(
+                f"Plugin {plugin_key} is missing required 'source' field"
+            )
+
+        plugin_type, plugin_name = plugin_key.split(":")
+
+        # Check plugin type
+        if plugin_type == "local":
+            if "version" in processed_config:
+                raise ConfigurationError(
+                    f"Local plugin {plugin_name} cannot specify a version"
+                )
+            if not (
+                processed_config["source"].startswith("./")
+                or processed_config["source"].startswith("../")
+            ):
+                raise ConfigurationError(
+                    f"Local plugin {plugin_name} source must start with ./ or ../"
+                )
+        elif plugin_type == "remote":
+            if "version" not in processed_config:
+                raise ConfigurationError(
+                    f"Remote plugin {plugin_name} is missing required 'version' field"
+                )
+
+        # Ensure variables exists
+        if "variables" not in processed_config:
+            processed_config["variables"] = {}
+        processed_config["variables"]["name"] = plugin_name
+
+        logger.debug("Final plugin config for '%s': %s", plugin_key, processed_config)
+        return processed_config
+
+    def process_agent(
+        self, agent_name: str, agent_config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Process an agent block configuration."""
+        logger.debug("Processing agent '%s': %s", agent_name, agent_config)
+        processed_config = dict(agent_config)  # copy
+
+        # Replace model references
+        if "model" in processed_config:
+            model_ref = processed_config["model"]
+            if isinstance(model_ref, str):
+                model_ref = self.interpolator.interpolate(
+                    model_ref, ["agent", agent_name, "model"]
+                )
+                processed_config["model"] = model_ref
+
+        # Replace plugin references
+        if "plugins" in processed_config:
+            plugins = []
+            for i, plugin_ref in enumerate(processed_config["plugins"]):
+                if isinstance(plugin_ref, str):
+                    plugin_ref = self.interpolator.interpolate(
+                        plugin_ref, ["agent", agent_name, f"plugins[{i}]"]
+                    )
+                    if plugin_ref is not None:
+                        plugins.append(plugin_ref)
+                else:
+                    plugins.append(plugin_ref)
+            processed_config["plugins"] = plugins
+
+        # Interpolate any remaining top-level agent attributes
+        for key, value in list(processed_config.items()):
+            if key not in ["model", "plugins"]:
+                processed_config[key] = self.interpolator.interpolate(
+                    value, ["agent", agent_name, key]
+                )
+
+        logger.debug("Final agent config for '%s': %s", agent_name, processed_config)
+        return processed_config
+
+
+class BlockMerger:
+    """Handles merging of HCL blocks."""
+
+    def __init__(self):
         self.variables = {}
         self.models = {}
         self.plugins = {}
         self.agents = {}
         self.runtime = {}
 
-    def _load_hcl_file(self, file_path: str) -> Dict[str, Any]:
-        """Load and parse HCL file."""
-        logger.debug("Loading HCL file: %s", file_path)
-        with open(file_path, "r") as f:
-            config = hcl2.load(f)
-            logger.debug("Raw HCL content: %s", config)
-            return config
-
-    def _merge_config(self, config: Dict[str, Any]):
-        """Merge a configuration dictionary into the current state"""
+    def merge_config(self, config: Dict[str, Any]) -> None:
+        """Merge a configuration dictionary into the current state."""
         logger.debug("Merging configuration: %s", config)
         # HCL structure is different from JSON - blocks are lists of single-key dicts
         for block_type, blocks in config.items():
@@ -108,6 +444,36 @@ class HCLConfigLoader:
                 logger.debug("Using value as-is: %s = %s (%s)", key, value, type(value))
         return result
 
+
+class HCLConfigLoader:
+    def __init__(self, config_dir: str):
+        self.config_dir = Path(config_dir)
+        # Initialize state variables
+        self.variables = {}
+        self.models = {}
+        self.plugins = {}
+        self.agents = {}
+        self.runtime = {}
+
+        self.block_merger = BlockMerger()
+        self.interpolator = ValueInterpolator(self.variables, self.models, self.plugins)
+        self.block_processor = BlockProcessor(self.interpolator)
+
+    def _merge_config(self, config: Dict[str, Any]) -> None:
+        """Merge a configuration dictionary into the current state."""
+        self.block_merger.merge_config(config)
+        # Update references after merging
+        self.variables = self.block_merger.variables
+        self.models = self.block_merger.models
+        self.plugins = self.block_merger.plugins
+        self.agents = self.block_merger.agents
+        self.runtime = self.block_merger.runtime
+
+        # Update interpolator references
+        self.interpolator.variables = self.variables
+        self.interpolator.models = self.models
+        self.interpolator.plugins = self.plugins
+
     def _process_variables(self):
         """Process all variables after merging configurations"""
         logger.debug("Processing variables: %s", self.variables)
@@ -118,277 +484,35 @@ class HCLConfigLoader:
         logger.debug("Processed variables: %s", processed_vars)
         self.variables = processed_vars
 
-    def _evaluate_ternary(self, expr: str) -> str:
-        """
-        Given something like 'var.environment == "prod" ? "big" : "small"',
-        parse it, evaluate the condition, and return "big" or "small".
-        We only handle a single '? :', no nesting.
-        """
-        pattern = re.compile(r"^(.*?)\?(.*?)\:(.*)$")
-        m = pattern.match(expr.strip())
-        if not m:
-            # If there's no match, just return expr as-is
-            return expr
-
-        condition_part = m.group(1).strip()
-        true_part = m.group(2).strip()
-        false_part = m.group(3).strip()
-
-        # Evaluate condition. We'll do a naive approach:
-        cond_str = str(self._interpolate_value(condition_part))
-
-        try:
-            # We'll block builtins for safety
-            result_bool = eval(cond_str, {"__builtins__": None}, {})
-        except Exception as e:
-            logger.debug(f"Failed to evaluate condition '{cond_str}': {e}")
-            result_bool = False
-
-        chosen_str = true_part if result_bool else false_part
-        chosen_str = str(self._interpolate_value(chosen_str))
-        return chosen_str
-
-    def _interpolate_value(self, value: Any) -> Any:
-        """Interpolate a value, including basic ternary conditionals and references."""
-        logger.debug("Interpolating value: %s (type: %s)", value, type(value))
-        if isinstance(value, str):
-            # 1) If there's a top-level ? and :, try ternary parse
-            if "?" in value and ":" in value and not value.startswith("${"):
-                new_val = self._evaluate_ternary(value)
-                if new_val != value:
-                    return new_val
-
-            # 2) Handle ${...} references
-            pattern = re.compile(r"\$\{([^}]+)\}")
-            result = value
-            while True:
-                match = pattern.search(result)
-                if not match:
-                    break
-                full_expr = match.group(0)  # '${...}'
-                inner_expr = match.group(1).strip()
-                # If there's a ? and :, attempt ternary
-                if "?" in inner_expr and ":" in inner_expr:
-                    sub_val = self._evaluate_ternary(inner_expr)
-                else:
-                    sub_val = self._basic_ref_interpolation(inner_expr)
-
-                if isinstance(sub_val, dict):
-                    return sub_val  # Return dict directly if needed
-
-                if not isinstance(sub_val, str):
-                    sub_val = str(sub_val)
-                start, end = match.span()
-                result = result[:start] + sub_val + result[end:]
-            return result
-
-        elif isinstance(value, dict):
-            return {k: self._interpolate_value(v) for k, v in value.items()}
-        elif isinstance(value, list):
-            return [self._interpolate_value(v) for v in value]
-        return value
-
-    def _basic_ref_interpolation(self, expr: str) -> Any:
-        """Handle references like var.x, model.y, plugin.z."""
-        return self._resolve_reference(expr)
-
-    def _convert_value(self, value: Any, target_type: str) -> Any:
-        """Convert a value to the specified type."""
-        # If value is already the right type, return it
-        if target_type == "number" and isinstance(value, (int, float)):
-            return value
-        elif target_type == "float" and isinstance(value, float):
-            return value
-        elif target_type == "int" and isinstance(value, int):
-            return value
-        elif target_type == "bool" and isinstance(value, bool):
-            return value
-        elif target_type == "string" and isinstance(value, str):
-            return value
-
-        # Otherwise convert string values
-        if isinstance(value, str):
-            if target_type == "number":
-                try:
-                    if "." in value:
-                        return float(value)
-                    return int(value)
-                except (ValueError, TypeError):
-                    return float(value)
-            elif target_type == "float":
-                return float(value)
-            elif target_type == "int":
-                return int(value)
-            elif target_type == "bool":
-                return value.lower() in ("true", "1", "yes", "on")
-            elif target_type == "string":
-                return value
-
-        # For non-string values that don't match target type, convert through string
-        return self._convert_value(str(value), target_type)
-
     def _process_models(self):
         """Process all models after merging configurations"""
         logger.debug("Processing models: %s", self.models)
+        processed_models = {}
         for model_name, model_config in self.models.items():
-            logger.debug("Processing model '%s': %s", model_name, model_config)
-            # Replace variable references in settings if any
-            if "settings" in model_config:
-                settings = self._interpolate_value(model_config["settings"])
-                logger.debug("Interpolated settings: %s", settings)
-
-                # Mark settings as a block if it came from HCL block syntax
-                if isinstance(settings, dict) and settings.get("_is_block", False):
-                    del settings["_is_block"]
-
-                setting_types = {
-                    "temperature": "float",
-                    "max_tokens": "int",
-                    "top_p": "float",
-                    "frequency_penalty": "float",
-                    "presence_penalty": "float",
-                    "top_k": "int",
-                    "repeat_penalty": "float",
-                    "stop": "string",
-                }
-
-                if isinstance(settings, dict):
-                    for key, value in settings.items():
-                        if key in setting_types:
-                            original = settings[key]
-                            settings[key] = self._convert_value(
-                                value, setting_types[key]
-                            )
-                            logger.debug(
-                                "Converted setting %s: %s => %s",
-                                key,
-                                original,
-                                settings[key],
-                            )
-
-                model_config["settings"] = settings
-
-            # Ensure required fields
-            if "provider" not in model_config:
-                logger.error("Model '%s' missing required 'provider' field", model_name)
-            if "name" not in model_config:
-                logger.error("Model '%s' missing required 'name' field", model_name)
-
-            logger.debug("Final model config for '%s': %s", model_name, model_config)
+            processed_models[model_name] = self.block_processor.process_model(
+                model_name, model_config
+            )
+        self.models = processed_models
 
     def _process_plugins(self):
-        """Process and validate all plugins after merging configurations"""
+        """Process all plugins after merging configurations"""
         logger.debug("Processing plugins: %s", self.plugins)
+        processed_plugins = {}
         for plugin_key, plugin_config in self.plugins.items():
-            # Basic checks
-            if "source" not in plugin_config:
-                raise ValueError(
-                    f"Plugin {plugin_key} is missing required 'source' field"
-                )
-
-            plugin_type, plugin_name = plugin_key.split(":")
-
-            # Check plugin type
-            if plugin_type == "local":
-                if "version" in plugin_config:
-                    raise ValueError(
-                        f"Local plugin {plugin_name} cannot specify a version"
-                    )
-                if not (
-                    plugin_config["source"].startswith("./")
-                    or plugin_config["source"].startswith("../")
-                ):
-                    raise ValueError(
-                        f"Local plugin {plugin_name} source must start with ./ or ../"
-                    )
-            elif plugin_type == "remote":
-                if "version" not in plugin_config:
-                    raise ValueError(
-                        f"Remote plugin {plugin_name} is missing required 'version' field"
-                    )
-
-            # Ensure variables exists
-            if "variables" not in plugin_config:
-                plugin_config["variables"] = {}
-            plugin_config["variables"]["name"] = plugin_name
-
-        logger.debug("Processed plugins: %s", self.plugins)
-
-    def _resolve_reference(self, ref: str) -> Any:
-        """Resolve a reference like var.x, model.name, plugin.type.name, etc."""
-        logger.debug("Resolving reference: %s (type: %s)", ref, type(ref))
-
-        if not isinstance(ref, str):
-            return ref
-
-        parts = ref.split(".")
-        if len(parts) < 2:
-            return ref
-
-        ref_type = parts[0]
-
-        if ref_type == "var" and len(parts) == 2:
-            result = self.variables.get(parts[1])
-            return result
-
-        elif ref_type == "model" and len(parts) == 2:
-            model_name = parts[1]
-            return self.models.get(model_name)
-
-        elif ref_type == "plugin" and len(parts) == 3:
-            plugin_type, plugin_name = parts[1:]
-            plugin_key = f"{plugin_type}:{plugin_name}"
-            return self.plugins.get(plugin_key)
-
-        return ref
+            processed_plugins[plugin_key] = self.block_processor.process_plugin(
+                plugin_key, plugin_config
+            )
+        self.plugins = processed_plugins
 
     def _process_agents(self):
         """Process all agents after merging configurations"""
         logger.debug("Processing agents: %s", self.agents)
         processed_agents = {}
-
         for agent_name, agent_config in self.agents.items():
-            logger.debug("Processing agent '%s': %s", agent_name, agent_config)
-            processed_config = dict(agent_config)  # copy
-
-            # Replace model references
-            if "model" in processed_config:
-                model_ref = processed_config["model"]
-                if isinstance(model_ref, str):
-                    if "${" in model_ref:
-                        model_ref = self._interpolate_value(model_ref)
-                    else:
-                        model_ref = self._resolve_reference(model_ref)
-                    if model_ref is None:
-                        raise ValueError(
-                            f"Model referenced by agent '{agent_name}' not found"
-                        )
-                    processed_config["model"] = model_ref
-
-            # Replace plugin references
-            if "plugins" in processed_config:
-                plugins = []
-                for plugin_ref in processed_config["plugins"]:
-                    if isinstance(plugin_ref, str):
-                        if "${" in plugin_ref:
-                            plugin_ref = self._interpolate_value(plugin_ref)
-                        else:
-                            plugin_ref = self._resolve_reference(plugin_ref)
-                        if plugin_ref is not None:
-                            plugins.append(plugin_ref)
-                    else:
-                        plugins.append(plugin_ref)
-                processed_config["plugins"] = plugins
-
-            # Interpolate any remaining top-level agent attributes
-            for key, value in list(processed_config.items()):
-                if key not in ["model", "plugins"]:
-                    processed_config[key] = self._interpolate_value(value)
-
-            processed_agents[agent_name] = processed_config
-
+            processed_agents[agent_name] = self.block_processor.process_agent(
+                agent_name, agent_config
+            )
         self.agents = processed_agents
-        logger.debug("Processed agents: %s", self.agents)
 
     def load_config(self) -> Dict[str, Any]:
         """Load and merge all HCL files in the directory, then validate them all."""
@@ -507,3 +631,31 @@ class HCLConfigLoader:
             "plugin": self.plugins,
             "agent": self.agents,
         }
+
+    def _resolve_reference(self, ref: str) -> Any:
+        """Resolve a reference like var.x, model.name, plugin.type.name, etc."""
+        logger.debug("Resolving reference: %s (type: %s)", ref, type(ref))
+
+        if not isinstance(ref, str):
+            return ref
+
+        parts = ref.split(".")
+        if len(parts) < 2:
+            return ref
+
+        ref_type = parts[0]
+
+        if ref_type == "var" and len(parts) == 2:
+            result = self.variables.get(parts[1])
+            return result
+
+        elif ref_type == "model" and len(parts) == 2:
+            model_name = parts[1]
+            return self.models.get(model_name)
+
+        elif ref_type == "plugin" and len(parts) == 3:
+            plugin_type, plugin_name = parts[1:]
+            plugin_key = f"{plugin_type}:{plugin_name}"
+            return self.plugins.get(plugin_key)
+
+        return ref
