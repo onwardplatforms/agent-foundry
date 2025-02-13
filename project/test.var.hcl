@@ -1,4 +1,4 @@
-model_temperature = 0.8
+model_temperature = 0.4
 debug_mode = true
 allowed_models = ["gpt-4", "gpt-3.5-turbo"]
 model_settings = {

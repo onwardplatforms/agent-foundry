@@ -41,7 +41,7 @@ class Agent:
             self._init_plugins()
 
     def _init_plugins(self) -> None:
-        """Initialize plugins for the agent."""
+        """Initialize plugins for the agent and fetch their instructions."""
         if not self.base_dir:
             return
 
@@ -49,10 +49,37 @@ class Agent:
         pm = PluginManager(self.base_dir, self.kernel)
         pm.load_all_plugins()
 
+        # Fetch instructions from each plugin and incorporate them
+        plugin_instructions = []
+        for plugin in self.kernel.plugins.values():
+            try:
+                # Try to get instructions using the get_instructions function
+                if hasattr(plugin, "get_instructions"):
+                    instructions = plugin.get_instructions()
+                    if instructions:
+                        plugin_instructions.append(
+                            f"\nInstructions for {plugin.name} plugin:\n{instructions}"
+                        )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to get instructions from plugin {plugin.name}: {e}"
+                )
+
+        # Append plugin instructions to system prompt if any were found
+        if plugin_instructions:
+            combined_instructions = "\n".join(plugin_instructions)
+            self.system_prompt = f"{self.system_prompt}\n\nPlugin-specific Instructions:{combined_instructions}"
+            # Update the chat history with new system prompt
+            self.history = ChatHistory()
+            self.history.add_system_message(self.system_prompt)
+            logger.debug("Added plugin instructions to system prompt")
+
     def start_new_session(self) -> None:
-        """Start a new chat session with a fresh history."""
+        """Start a new chat session with a fresh history while preserving plugin instructions."""
         self.history = ChatHistory()
-        self.history.add_system_message(self.system_prompt)
+        self.history.add_system_message(
+            self.system_prompt
+        )  # system_prompt already includes plugin instructions
         logger.debug("Started new chat session for agent '%s'", self.name)
         logger.debug("System prompt: %s", self.system_prompt)
 
@@ -106,7 +133,7 @@ class Agent:
         """
         Process a chat message by passing the conversation history to the provider.
         If the provider yields a chunk with a function call, run _execute_function,
-        then continue the conversation with the function’s result.
+        then continue the conversation with the function's result.
         """
         # Add the user's message to the history
         self.history.add_user_message(message)
