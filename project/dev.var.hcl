@@ -1,3 +1,4 @@
 model_temperature = 0.9
 signature = "Development Signature"
-provider = "ollama"
+model_provider = "openai"
+model_name = "gpt-4"

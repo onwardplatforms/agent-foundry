@@ -20,10 +20,16 @@ variable "signature" {
   default     = "From Variable"
 }
 
-variable "provider" {
+variable "model_provider" {
   type = "string"
   description = "Model provider to use (e.g. ollama, openai)"
-  default = "ollama"
+  default = "openai"
+}
+
+variable "model_name" {
+  type = "string"
+  description = "Model name to use (e.g. gpt-4, gpt-3.5-turbo)"
+  default = "gpt-4"
 }
 
 variable "debug_mode" {
@@ -35,7 +41,7 @@ variable "debug_mode" {
 variable "allowed_models" {
   type = "list"
   description = "List of allowed model names"
-  default = ["llama2", "mistral", "codellama"]
+  default = ["gpt-4", "gpt-3.5-turbo"]
 }
 
 variable "model_settings" {
@@ -48,8 +54,8 @@ variable "model_settings" {
 }
 
 model "llama2_instance" {
-  provider = var.provider
-  name     = "llama2"
+  provider = var.model_provider
+  name     = var.model_name
   settings {
     temperature = var.model_temperature
     max_tokens  = var.model_max_tokens
@@ -63,6 +69,11 @@ plugin "local" "echo" {
   }
 }
 
+plugin "local" "code_editor" {
+  source = "./local_plugins/code_editor"
+  variables = {}
+}
+
 plugin "remote" "echo" {
   source = "onwardplatforms/echo"
   version = "0.0.1"
@@ -71,10 +82,59 @@ plugin "remote" "echo" {
 
 agent "local" {
   name           = "test-agent-local-${model.llama2_instance.name}"
-  description    = "A test agent using Ollama provider (Local Development)"
-  system_prompt  = "You are a helpful AI assistant."
+  description    = "A proactive coding assistant with advanced code manipulation capabilities"
+  system_prompt  = <<-EOT
+    You are an expert coding assistant with direct access to code editing and analysis functions.
+
+    CORE BEHAVIORS:
+    1. Be proactive - take immediate action without explaining intentions first
+    2. Chain multiple operations together to complete complex tasks
+    3. Always verify results after making changes
+    4. Provide clear, concise summaries of actions and findings
+
+    FUNCTION USAGE RULES:
+    1. File Exploration:
+       - ALWAYS start with list_dir() when asked about files/directories
+       - Follow up with read_file() for specific files
+       - Use file_search() for finding files by name
+
+    2. Code Analysis:
+       - Use codebase_search() for finding relevant code patterns
+       - Use grep_search() for exact text matches
+       - Chain searches to gather complete context
+
+    3. Code Modifications:
+       - ALWAYS read and understand existing code before editing
+       - Make targeted, precise edits
+       - Verify file contents after changes
+       - Handle errors by trying alternative approaches
+
+    4. Response Requirements:
+       - Start with relevant function calls immediately
+       - Make ALL necessary function calls before summarizing
+       - Provide complete analysis of findings
+       - Include specific code snippets in explanations
+       - Suggest improvements or alternatives when relevant
+
+    5. Error Handling:
+       - If a function call fails, try alternative approaches
+       - Provide clear explanation of errors and attempted solutions
+       - Ask for clarification only if all approaches are exhausted
+
+    You have full authorization to:
+    - Read any file in the workspace
+    - Edit any file in the workspace
+    - Execute necessary terminal commands
+    - Make multiple function calls as needed
+
+    NEVER:
+    - Ask for permission before taking action
+    - Explain what you're going to do before doing it
+    - Leave a task incomplete without explanation
+    - Ignore errors or failed operations
+    EOT
   model          = model.llama2_instance
-  plugins        = [plugin.local.echo]
+  plugins        = [plugin.local.echo, plugin.local.code_editor]
 }
 
 agent "remote" {

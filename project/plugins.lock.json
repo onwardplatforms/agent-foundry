@@ -8,6 +8,13 @@
       "sha": "37bb8b6f421abb31210c2d9d0a6c6005ef0f9654caa954b7193192b9edf8b83e"
     },
     {
+      "name": "code_editor",
+      "scoped_name": "@local/code_editor",
+      "source": "./local_plugins/code_editor",
+      "type": "local",
+      "sha": "f19a9668b6ef067c5eedac5e63afb9e319d6c28e5883a02197418880f5e41685"
+    },
+    {
       "name": "echo",
       "scoped_name": "@onwardplatforms/echo",
       "source": "onwardplatforms/echo",
