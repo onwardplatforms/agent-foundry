@@ -249,23 +249,8 @@ class PluginManager:
                         )
                     key = f"AGENT_VAR_{k.upper()}"
                     os.environ[key] = resolved
-                    self.logger.debug(
-                        "Set %s=%s (plugin '%s')", key, resolved, cfg.name
-                    )
-                elif v.startswith("${") and v.endswith("}"):
-                    # Handle HCL variable references (${var.x})
-                    # The value should already be interpolated by the HCL loader
-                    self.logger.warning(
-                        "Variable '%s' not interpolated by HCL loader: %s", k, v
-                    )
-                    key = f"AGENT_VAR_{k.upper()}"
-                    os.environ[key] = ""
-                    self.logger.debug("Set %s=%s (plugin '%s')", key, "", cfg.name)
                 else:
-                    # Direct string value
-                    key = f"AGENT_VAR_{k.upper()}"
-                    os.environ[key] = v
-                    self.logger.debug("Set %s=%s (plugin '%s')", key, v, cfg.name)
+                    os.environ[f"AGENT_VAR_{k.upper()}"] = v
             else:
                 # Non-string value
                 key = f"AGENT_VAR_{k.upper()}"
@@ -439,19 +424,7 @@ class PluginManager:
         self.logger.debug("Plugin '%s' processed successfully.", cfg.name)
 
     def load_plugin(self, name: str, git_ref: Optional[str] = None) -> Any:
-        """Load a plugin from .plugins or local source.
-
-        Args:
-            name: Name of the plugin's scoped_name (e.g. @local/echo)
-            git_ref: Optional git reference (version) for GitHub plugins
-
-        Returns:
-            The loaded plugin instance
-
-        Raises:
-            PluginNotFoundError: If plugin cannot be found
-            ImportError: If plugin cannot be imported
-        """
+        """Load a plugin from .plugins or local source."""
         self.logger.debug("Loading plugin '%s' (ref=%s).", name, git_ref or "local")
 
         if name not in self.plugin_configs:
@@ -515,31 +488,75 @@ class PluginManager:
                     f"Failed to import local plugin {plugin_config.name}: {e}"
                 )
 
-        self.logger.debug("Looking for plugin class in module: %s", module.__name__)
+        # Find any class that has kernel functions
         plugin_class = None
+        self.logger.debug("Searching for plugin classes in module: %s", module.__name__)
         for attr_name in dir(module):
             attr = getattr(module, attr_name)
-            if (
-                isinstance(attr, type)
-                and attr.__module__ == module.__name__
-                and (
-                    attr.__name__ in ["Plugin", "TestPlugin", "ExamplePlugin"]
-                    or attr.__name__.lower() == plugin_config.name.lower()
+            self.logger.debug(
+                "Checking attribute: %s (type: %s)", attr_name, type(attr)
+            )
+
+            if not isinstance(attr, type):
+                continue
+
+            if attr.__module__ != module.__name__:
+                self.logger.debug(
+                    "Skipping %s: wrong module (%s != %s)",
+                    attr_name,
+                    attr.__module__,
+                    module.__name__,
                 )
-            ):
+                continue
+
+            # Check for kernel functions in the class
+            has_kernel_functions = False
+            self.logger.debug("Checking methods of class: %s", attr_name)
+
+            for method_name, method in attr.__dict__.items():
+                if method_name.startswith("__"):
+                    continue
+
+                try:
+                    self.logger.debug(
+                        "Checking method: %s (callable: %s, kernel_function: %s)",
+                        method_name,
+                        callable(method),
+                        (
+                            hasattr(method, "__kernel_function__")
+                            if callable(method)
+                            else False
+                        ),
+                    )
+
+                    if callable(method) and hasattr(method, "__kernel_function__"):
+                        self.logger.debug(f"Found kernel function: {method_name}")
+                        has_kernel_functions = True
+                        break
+                except Exception as e:
+                    self.logger.debug(f"Error checking method {method_name}: {e}")
+                    continue
+
+            if has_kernel_functions:
                 plugin_class = attr
-                self.logger.debug("Found plugin class: %s", attr.__name__)
+                self.logger.debug(
+                    "Found plugin class: %s with kernel functions", attr.__name__
+                )
                 break
 
         if not plugin_class:
-            self.logger.error("No plugin class found in module: %s", module.__name__)
-            raise PluginNotFoundError(f"No plugin class in module: {module.__name__}")
+            self.logger.error(
+                "No plugin class with kernel functions found in module: %s",
+                module.__name__,
+            )
+            raise PluginNotFoundError(
+                f"No plugin class with kernel functions found in module: {module.__name__}"
+            )
 
         self.logger.debug("Instantiating plugin class: %s", plugin_class.__name__)
         instance = plugin_class()
 
         # Register with kernel using sanitized scoped name to prevent collisions
-        # Sanitize the name to be compatible with SK's requirements (alphanumeric and underscores)
         sanitized_name = (
             plugin_config.scoped_name.replace("/", "_")
             .replace("@", "")
@@ -767,3 +784,32 @@ class PluginManager:
         with path.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         self.logger.debug("Lockfile updated: %s", path)
+
+    def get_openai_functions(self) -> Dict[str, Any]:
+        """Convert registered plugins to OpenAI function definitions."""
+        if not self.kernel:
+            return {"functions": [], "function_call": "auto"}
+
+        functions = []
+        for plugin in self.kernel.plugins.values():
+            for func in plugin.functions.values():
+                # Convert each function to OpenAI format
+                function_def = {
+                    "name": f"{plugin.name}_{func.name}",
+                    "description": func.description,
+                    "parameters": {"type": "object", "properties": {}, "required": []},
+                }
+
+                # Add parameters
+                for param in func.parameters:
+                    function_def["parameters"]["properties"][param.name] = {
+                        "type": "string",  # Default to string for simplicity
+                        "description": param.description or "",
+                    }
+                    # Check if parameter is required based on default value
+                    if param.default_value is None and param.type_ != "bool":
+                        function_def["parameters"]["required"].append(param.name)
+
+                functions.append(function_def)
+
+        return {"functions": functions, "function_call": "auto"}

@@ -1,22 +1,17 @@
+# agent_runtime/agent.py
 """Agent implementation for Agent Foundry with a lockfile-based plugin approach."""
 
+import json
 import logging
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, Optional, Union
+from typing import Any, AsyncIterator, Dict, Optional
 
 from semantic_kernel import Kernel
-from semantic_kernel.connectors.ai.ollama import OllamaChatCompletion
-from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
-from semantic_kernel.connectors.ai.prompt_execution_settings import (
-    PromptExecutionSettings,
-)
-from semantic_kernel.contents import (
-    AuthorRole,
-    ChatHistory,
-    StreamingChatMessageContent,
-)
+from semantic_kernel.contents import ChatHistory, StreamingChatMessageContent
 
-from agent_runtime.plugins.manager import PluginConfig
+from agent_runtime.plugins.manager import PluginManager
+
+logger = logging.getLogger(__name__)
 
 
 class Agent:
@@ -27,227 +22,188 @@ class Agent:
         name: str,
         description: str,
         system_prompt: str,
-        model_config: Dict[str, Any],
-        kernel: Optional[Kernel] = None,
-        plugins_dir: Optional[Path] = None,
+        provider,  # Polymorphic provider (OpenAIProvider, OllamaProvider, etc.)
+        base_dir: Optional[Path] = None,
+        skip_init: bool = False,
     ):
+        """Initialize the agent."""
         self.name = name
         self.description = description
         self.system_prompt = system_prompt
-        self.logger = logging.getLogger("agent_runtime")
+        self.provider = provider
+        self.base_dir = base_dir
+        self.kernel: Optional[Kernel] = None
+        self.history = ChatHistory()
+        self.history.add_system_message(system_prompt)
 
-        # Initialize or use provided kernel
-        self.kernel = kernel or Kernel()
-        self.chat_service = self._setup_chat_service(model_config)
-        self.kernel.add_service(self.chat_service)
+        # If skip_init=False and we have a base directory, load plugins
+        if not skip_init and base_dir:
+            self._init_plugins()
 
-        # Store config
-        self.model_config = model_config
-        self.plugins_dir = plugins_dir
+    def _init_plugins(self) -> None:
+        """Initialize plugins for the agent."""
+        if not self.base_dir:
+            return
 
-        # Initialize chat history for the session
-        self._session_history = ChatHistory()
-        self._session_history.add_system_message(system_prompt)
-
-        self.logger.debug("Agent '%s' initialized.", self.name)
+        self.kernel = Kernel()
+        pm = PluginManager(self.base_dir, self.kernel)
+        pm.load_all_plugins()
 
     def start_new_session(self) -> None:
         """Start a new chat session with a fresh history."""
-        self._session_history = ChatHistory()
-        self._session_history.add_system_message(self.system_prompt)
-        self.logger.debug("Started new chat session for agent '%s'", self.name)
-        self.logger.debug("System prompt: %s", self.system_prompt)
+        self.history = ChatHistory()
+        self.history.add_system_message(self.system_prompt)
+        logger.debug("Started new chat session for agent '%s'", self.name)
+        logger.debug("System prompt: %s", self.system_prompt)
 
     def _log_chat_history(self, prefix: str = "") -> None:
-        """Log the current state of the chat history."""
-        self.logger.debug("%sChat history:", prefix)
-        for i, msg in enumerate(self._session_history.messages):
-            self.logger.debug("%s  [%d] %s: %s", prefix, i, msg.role, msg.content)
+        """Log the current state of the chat history (for debugging)."""
+        logger.debug("%sChat history:", prefix)
+        for i, msg in enumerate(self.history.messages):
+            logger.debug("%s  [%d] %s: %s", prefix, i, msg.role, msg.content)
 
-    def _setup_chat_service(
-        self, model_config: Dict[str, Any]
-    ) -> Union[OpenAIChatCompletion, OllamaChatCompletion]:
-        """Set up the chat completion service based on provider."""
-        self.logger.debug("Setting up chat service with model config: %s", model_config)
+    async def _execute_function(self, function_call: Dict[str, Any]) -> str:
+        """Execute a function call and return the result."""
+        if not self.kernel:
+            return "Error: No kernel available for function execution"
 
-        if isinstance(model_config, str):
-            self.logger.error("Model config is a string: %s", model_config)
-            raise ValueError("Model config is not resolved properly")
+        try:
+            # Example function_call dict:
+            # {"name": "pluginName_functionName", "arguments": "{\"argKey\":\"argValue\"}"}
+            func_name = function_call["name"]
+            arguments_json = function_call.get("arguments", "{}")
+            arguments = json.loads(arguments_json)
 
-        provider = model_config.get("provider")
-        model_name = model_config.get("name")
+            # The function name is "pluginName_functionName"
+            plugin_name, func_name = func_name.split("_", 1)
 
-        if not provider or not model_name:
-            self.logger.error("Model config missing required fields: %s", model_config)
-            raise ValueError("Model config missing required fields: provider, name")
+            plugin = self.kernel.plugins.get(plugin_name)
+            if not plugin:
+                return f"Error: Plugin '{plugin_name}' not found"
 
-        if provider == "openai":
-            self.logger.debug("Initializing OpenAI with model: %s", model_name)
-            return OpenAIChatCompletion(ai_model_id=model_name)
-        elif provider == "ollama":
-            self.logger.debug("Initializing Ollama with model: %s", model_name)
-            return OllamaChatCompletion(ai_model_id=model_name)
-        else:
-            raise ValueError(f"Unsupported model provider: {provider}")
+            func = plugin.functions.get(func_name)
+            if not func:
+                return (
+                    f"Error: Function '{func_name}' not found in plugin '{plugin_name}'"
+                )
+
+            # Build KernelArguments
+            from semantic_kernel.functions import KernelArguments
+
+            kernel_args = KernelArguments()
+            for k, v in arguments.items():
+                kernel_args[k] = v
+
+            # Execute the function
+            result = await func.invoke(kernel=self.kernel, arguments=kernel_args)
+            return str(result)
+
+        except Exception as e:
+            logger.exception("Error executing function")
+            return f"Error executing function: {str(e)}"
+
+    async def chat(self, message: str) -> AsyncIterator[StreamingChatMessageContent]:
+        """
+        Process a chat message by passing the conversation history to the provider.
+        If the provider yields a chunk with a function call, run _execute_function,
+        then continue the conversation with the function’s result.
+        """
+        # Add the user's message to the history
+        self.history.add_user_message(message)
+
+        # 1. Ask our provider to produce a streaming response (chunks).
+        async for chunk in self.provider.chat(self.history, kernel=self.kernel):
+            if chunk is None:
+                continue
+
+            # 2. If we detect a function call from the provider:
+            if hasattr(chunk, "function_call") and chunk.function_call:
+                # Execute the function
+                result = await self._execute_function(chunk.function_call)
+
+                # Add function call and result to our conversation
+                self.history.add_assistant_message(
+                    content="", function_call=chunk.function_call
+                )
+                self.history.add_function_message(
+                    name=chunk.function_call["name"], content=result
+                )
+
+                # 3. Continue the conversation with the function result appended
+                async for response_chunk in self.provider.chat(
+                    self.history, kernel=self.kernel
+                ):
+                    yield response_chunk
+
+            else:
+                # Normal text chunk
+                yield chunk
+
+        # 4. Once complete, if the last chunk had text, add it to history
+        if chunk and hasattr(chunk, "content") and chunk.content:
+            self.history.add_assistant_message(chunk.content)
+            self._log_chat_history("After model response: ")
 
     @classmethod
     def from_config(
         cls,
         config: Dict[str, Any],
         base_dir: Optional[Path] = None,
-        lockfile_name: str = "plugins.lock.json",
         skip_init: bool = False,
     ) -> "Agent":
-        """Create an agent from config.
-
-        If skip_init=True, skip plugin installation checks.
-        This relies on CLI commands (or other processes) having already run 'init' if needed.
-
-        Args:
-            config: The agent configuration dictionary
-            base_dir: Optional base directory for resolving paths
-            lockfile_name: Name of the lockfile (default: plugins.lock.json)
-            skip_init: Whether to skip plugin installation checks
-
-        Returns:
-            The initialized Agent instance
         """
-        logger = logging.getLogger("agent_runtime")
-        logger.debug(
-            "Creating agent from config at '%s'. skip_init=%s", base_dir, skip_init
+        Create an agent from a config dictionary.
+
+        Expects a structure like:
+        {
+            "name": "AgentName",
+            "description": "...",
+            "system_prompt": "...",
+            "model": {
+                "provider": "openai" or "ollama",
+                "name": "gpt-3.5-turbo" or "llama2",
+                "settings": [ ... ]  # optional
+            }
+        }
+        """
+        from agent_runtime.providers.base import ProviderConfig, ProviderType
+
+        # Extract model info
+        model_config = config.get("model", {})
+        if isinstance(model_config, dict):
+            provider_type = model_config.get("provider", "openai")
+            model_name = model_config.get("name", "gpt-3.5-turbo")
+            # "settings" might be a list of dicts; take the first if present
+            model_settings = (model_config.get("settings", [{}]) or [{}])[0]
+        else:
+            provider_type = "openai"
+            model_name = "gpt-3.5-turbo"
+            model_settings = {}
+
+        # Build provider config
+        provider_config = ProviderConfig(
+            name=ProviderType(provider_type),
+            model=model_name,
+            settings=model_settings,
+            agent_id=config.get("name"),
         )
-        logger.debug("Agent config: %s", config)
 
-        kernel = Kernel()
+        # Instantiate the correct provider
+        if provider_type == "ollama":
+            from agent_runtime.providers.ollama import OllamaProvider
 
-        # Build plugin configs here just for clarity, but do not install
-        # or load them automatically unless skip_init==False (which we
-        # typically do in an 'init' workflow). The CLI is handling that logic.
-        plugin_data = config.get("plugins", [])
-        logger.debug("Plugin data: %s", plugin_data)
+            provider = OllamaProvider(provider_config)
+        else:
+            from agent_runtime.providers.openai import OpenAIProvider
 
-        configs = []
-        for p in plugin_data:
-            try:
-                if isinstance(p, dict) and all(
-                    k in p for k in ["type", "name", "source"]
-                ):
-                    c = PluginConfig(
-                        plugin_type=p["type"],
-                        name=p["name"],
-                        source=p["source"],
-                        version=p.get("version"),
-                        variables=p.get("variables", {}),
-                    )
-                    configs.append(c)
-                else:
-                    logger.debug("Skipping unresolved plugin reference: %s", p)
-            except (KeyError, ValueError) as ex:
-                logger.error("Invalid plugin config: %s", ex)
+            # IMPORTANT: Pass base_dir, so the provider can use it for PluginManager
+            provider = OpenAIProvider(provider_config, base_dir=base_dir)
 
-        # Create the agent instance with the new kernel.
-        # We assume plugins have been loaded externally if skip_init=True.
-        logger.debug("Creating agent with model config: %s", config["model"])
-        agent = cls(
+        return cls(
             name=config["name"],
-            description=config["description"],
+            description=config.get("description", ""),
             system_prompt=config["system_prompt"],
-            model_config=config["model"],
-            kernel=kernel,
-            plugins_dir=base_dir,
+            provider=provider,
+            base_dir=base_dir,
+            skip_init=skip_init,
         )
-        return agent
-
-    async def chat(self, message: str) -> AsyncIterator[StreamingChatMessageContent]:
-        """Generate a chat response from the agent.
-
-        Args:
-            message: The user's input message
-
-        Yields:
-            Chat message content chunks as they are generated
-        """
-        self.logger.debug("Agent '%s' received message: %s", self.name, message)
-        self._log_chat_history("Before adding message: ")
-
-        # Add the user's message to the session history
-        self._session_history.add_user_message(message)
-        self._log_chat_history("After adding message: ")
-
-        # List plugin functions
-        for pname, plugin in self.kernel.plugins.items():
-            self.logger.debug(
-                "Plugin '%s' functions: %s", pname, list(plugin.functions.keys())
-            )
-
-        # Attempt plugin function match
-        for pname, plugin in self.kernel.plugins.items():
-            for fname, func in plugin.functions.items():
-                if message.lower().startswith(fname.lower()):
-                    self.logger.debug("Matched plugin function '%s.%s'", pname, fname)
-                    arg = message[len(fname) :].strip() or "World"
-
-                    from semantic_kernel.functions import KernelArguments
-
-                    args = KernelArguments()
-
-                    if func.parameters:
-                        param_name = func.parameters[0].name
-                        args[param_name] = arg
-
-                    try:
-                        result = await func.invoke(kernel=self.kernel, arguments=args)
-                        response = StreamingChatMessageContent(
-                            role=AuthorRole.ASSISTANT,
-                            content=str(result),
-                            choice_index=0,
-                        )
-                        yield response
-                        self._session_history.add_assistant_message(str(result))
-                        self._log_chat_history("After plugin response: ")
-                        return
-                    except Exception as e:
-                        err_msg = f"Function '{fname}' failed: {e}"
-                        self.logger.error(err_msg)
-                        response = StreamingChatMessageContent(
-                            role=AuthorRole.ASSISTANT, content=err_msg, choice_index=0
-                        )
-                        yield response
-                        self._session_history.add_assistant_message(err_msg)
-                        self._log_chat_history("After plugin error: ")
-                        return
-
-        # Fallback to chat model
-        self.logger.debug("No function matched; using chat service for response.")
-        settings = self.model_config.get("settings", {})
-        if isinstance(settings, list) and len(settings) == 1:
-            settings = settings[0]
-        if not isinstance(settings, dict):
-            settings = {}
-        if isinstance(settings, dict) and settings.get("_is_block", False):
-            del settings["_is_block"]
-
-        exec_settings = PromptExecutionSettings(
-            service_id=None,
-            extension_data={},
-            temperature=settings.get("temperature", 0.7),
-            top_p=settings.get("top_p", 1.0),
-            max_tokens=settings.get("max_tokens"),
-        )
-
-        # Accumulate the full response
-        full_response = []
-        self.logger.debug("Sending chat history to model:")
-        self._log_chat_history("  ")
-        async for chunk in self.chat_service.get_streaming_chat_message_content(
-            chat_history=self._session_history,
-            settings=exec_settings,
-        ):
-            if chunk:
-                full_response.append(chunk.content)
-                yield chunk
-
-        if full_response:
-            complete_response = "".join(full_response)
-            self._session_history.add_assistant_message(complete_response)
-            self._log_chat_history("After model response: ")

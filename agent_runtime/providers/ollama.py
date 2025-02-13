@@ -1,7 +1,8 @@
+# agent_runtime/providers/ollama.py
 """Ollama provider implementation."""
 
 import json
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional, Dict, Any
 
 import aiohttp
 import requests
@@ -11,27 +12,20 @@ from semantic_kernel.contents import (
     ChatHistory,
     StreamingChatMessageContent,
 )
+from semantic_kernel.kernel import Kernel
 
 from agent_runtime.env import get_env_var
 from agent_runtime.providers.base import OllamaSettings, Provider, ProviderConfig
 
 
 class OllamaProvider(Provider):
-    """Ollama provider implementation."""
+    """Ollama provider implementation that does not do function calling."""
 
     def __init__(self, config: ProviderConfig) -> None:
         """Initialize provider."""
         # Get model and base URL from environment variables
-        env_model = get_env_var(
-            "OLLAMA_MODEL",
-            "",
-            config.agent_id,
-        )
-        env_base_url = get_env_var(
-            "OLLAMA_BASE_URL",
-            "",
-            config.agent_id,
-        )
+        env_model = get_env_var("OLLAMA_MODEL", "", config.agent_id)
+        env_base_url = get_env_var("OLLAMA_BASE_URL", "", config.agent_id)
 
         # Set model from environment or config or default
         self.model = env_model or config.model or "llama2"
@@ -42,15 +36,15 @@ class OllamaProvider(Provider):
             env_base_url or settings.get("base_url") or "http://localhost:11434"
         )
 
-        # Create a new config with updated settings
+        # Rebuild the provider config with updated settings
         updated_config = ProviderConfig(
             name=config.name,
             model=config.model,
             settings=settings,
             agent_id=config.agent_id,
         )
-
         super().__init__(updated_config)
+
         if not isinstance(self.settings, OllamaSettings):
             raise ValueError("Invalid settings type for Ollama provider")
 
@@ -61,7 +55,6 @@ class OllamaProvider(Provider):
         """Check if Ollama server is running."""
         if not isinstance(self.settings, OllamaSettings):
             raise ValueError("Invalid settings type for Ollama provider")
-
         try:
             response = requests.get(f"{self.settings.base_url}/api/version")
             response.raise_for_status()
@@ -74,12 +67,19 @@ class OllamaProvider(Provider):
             ) from e
 
     async def chat(
-        self, history: ChatHistory
+        self,
+        history: ChatHistory,
+        kernel: Optional[Kernel] = None,
+        functions: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[StreamingChatMessageContent]:
-        """Process a chat message using Ollama."""
+        """
+        Process a chat message using Ollama.
+        Ignores any function-calling logic (Ollama currently doesn't support it).
+        """
         if not isinstance(self.settings, OllamaSettings):
             raise ValueError("Invalid settings type for Ollama provider")
 
+        # Convert ChatHistory to Ollama's message list
         messages = []
         for msg in history.messages:
             if msg.role == AuthorRole.SYSTEM:
@@ -88,17 +88,23 @@ class OllamaProvider(Provider):
                 messages.append({"role": "user", "content": msg.content})
             elif msg.role == AuthorRole.ASSISTANT:
                 messages.append({"role": "assistant", "content": msg.content})
+            # We ignore function messages or treat them as assistant text if you prefer
 
         payload = {
             "model": self.model,
             "messages": messages,
             "stream": True,
-            "options": {"temperature": self.settings.temperature},
+            "options": {
+                "temperature": self.settings.temperature,
+                # Add other Ollama-specific parameters if needed
+            },
         }
 
+        # Send the request to Ollama
+        url = f"{self.settings.base_url}/api/chat"
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                f"{self.settings.base_url}/api/chat",
+                url,
                 json=payload,
                 headers={"Content-Type": "application/json"},
             ) as response:
@@ -111,10 +117,13 @@ class OllamaProvider(Provider):
                         if "error" in data:
                             raise RuntimeError(f"Ollama error: {data['error']}")
                         if "message" in data:
+                            # Return the chunk as a normal assistant message
+                            content = data["message"]["content"]
                             yield StreamingChatMessageContent(
                                 role=AuthorRole.ASSISTANT,
-                                content=data["message"]["content"],
+                                content=content,
                                 choice_index=0,
                             )
                     except json.JSONDecodeError:
+                        # Could be partial JSON or empty line, skip
                         continue
