@@ -1,16 +1,3 @@
-"""
-Refactored CodeEditor Plugin (No HCL-specific or on-disk backups).
-
-Features:
-  - File reading, listing, and searching
-  - Line-based editing (append, replace lines, etc.)
-  - Regex-driven editing for partial text manipulations
-  - Simple linting/formatting for Python and JS-based files
-  - No special block editing or backup logic
-
-All paths are validated to stay within the configured workspace.
-"""
-
 import logging
 import os
 import re
@@ -21,7 +8,7 @@ from typing import List, Optional, Dict, Any, Union
 try:
     from semantic_kernel.functions.kernel_function_decorator import kernel_function
 except ImportError:
-
+    # Fallback if not running inside Semantic Kernel
     def kernel_function(description: str = ""):
         def decorator(func):
             return func
@@ -34,138 +21,335 @@ logger = logging.getLogger(__name__)
 
 class CodeEditorPlugin:
     """
-    A simplified, file-type-agnostic code editor plugin supporting:
-      - Basic file/directory operations
-      - Line-based editing (insert, replace, append, etc.)
-      - Regex-based editing for partial text matches
-      - Linting and formatting (if tools are installed)
+    A fully generic code editor plugin with:
+      - Directory and file operations
+      - Simple, all-files text searching (ripgrep or grep+find fallback)
+      - Line-based and regex-based editing
+      - Shell command execution
+
+    No language-specific logic or heuristics—purely literal text searching
+    and direct file operations, suitable for a variety of code/editing tasks.
     """
 
     PLUGIN_INSTRUCTIONS = r"""
-    CodeEditor Plugin Usage (Refactored):
+    Recommended Code Editing Workflow
+    =================================
 
-    1. READING & SEARCHING
-       - `read_file(path)` to view file contents (optionally a line range).
-       - `grep_search(pattern, file_pattern="*.py")` or `codebase_search(query)` to find references.
+    1) Inspect the Project
+    - Use `list_dir()` or `tree_list()` to see how files and folders are organized.
+    - Use `search("<keyword>")` to locate references to important terms or functions.
 
-    2. LINE-BASED EDITS
-       - Use `edit_file(path, content, mode="...")` for direct line manipulation:
-         * "replace": overwrite the entire file with `content`.
-         * "append"/"prepend": add lines to end/start.
-         * "insert:<line>": insert `content` at that 1-based line number.
-         * "replace:<line>` or `replace:<start>-<end>`: replace those lines with `content`.
-         * "smart": attempt to place `content` after a line with the most overlapping words (fallback=append).
-       - `remove_lines(path, start_line, num_lines=1)`: remove lines by explicit count.
+    2) Read and Plan
+    - Once you identify relevant files, call `read_file()` to examine specific lines or the entire file.
+    - Decide if you need line-based edits or regex-based transformations.
 
-    3. REGEX/PATTERN-BASED EDITS
-       - Use `pattern_edit(path, pattern, new_content="", mode="replace")`
-         * `mode="remove"`: delete matched text
-         * `mode="replace"`: replace matched text
-         * `mode="before"/"after"`: insert `new_content` around matched text
-       - This is ideal when you only want to modify specific text rather than entire lines.
+    3) Make Edits
+    - For line-based changes (inserting, replacing, removing lines), use `edit_file()`.
+    - For pattern-based changes (renaming a function, removing trailing whitespace, etc.), use `pattern_edit()`.
+    - If you only need to drop a block of lines, `remove_lines()` is handy.
 
-    4. VERIFY CHANGES
-       - Re-run `read_file(path)` after any edit to confirm success.
-       - Note that line numbers *can change* after each edit, so always re-check before subsequent line-based edits.
+    4) Validate Your Work
+    - Re-read the updated files with `read_file()` or run a quick `search()` to confirm your changes are present.
+    - Run shell commands or tests with `run_terminal_command()` if you need to verify the build, lint the code, or run tests.
 
-    5. OTHER UTILITIES
-       - `delete_file(path, recursive=False)` for removing files/directories.
-       - `lint_code(path)` or `format_code(path)` to check/format code.
-       - `run_terminal_command(command)` to execute shell tasks.
-       - `get_instructions()` returns these guidelines.
-
-    Remember: There's NO automatic backup or restore included now. If you need versioning, you must implement it yourself.
+    5) Conclude and Clean Up
+    - If any files or directories are no longer needed, remove them with `delete_file()`.
+    - Provide a final summary of changes to the user, including any next steps or discovered issues.
     """
 
     def __init__(self, workspace: Optional[str] = None):
         """
-        :param workspace: Path to the workspace root directory. Defaults to the current working directory.
+        Initializes the CodeEditorPlugin with a specified workspace root directory.
+
+        Args:
+            workspace (str, optional): The path to the workspace root. If omitted,
+                defaults to the current working directory.
         """
         self.workspace_root = Path(workspace or os.getcwd()).resolve()
+        logger.info(
+            f"CodeEditorPlugin initialized with workspace root: {self.workspace_root}"
+        )
 
     # -------------------------------------------------------------------------
     # Internal Helpers
     # -------------------------------------------------------------------------
     def _validate_path(self, path: Union[str, Path]) -> Path:
         """
-        Resolve a path within the workspace, ensuring it does not escape the workspace root.
-        """
-        try:
-            full_path = (self.workspace_root / path).resolve()
-            if not str(full_path).startswith(str(self.workspace_root)):
-                raise ValueError(f"Path '{full_path}' is outside the workspace root.")
-            return full_path
-        except Exception as e:
-            raise ValueError(f"Invalid path: {str(e)}")
+        Resolve and verify that 'path' is inside the workspace root.
 
-    def _find_line_numbers(
-        self, content: str, pattern: str, context_lines: int = 0
-    ) -> Dict[str, Any]:
+        Args:
+            path (Union[str, Path]): A file or directory path (relative or absolute).
+
+        Returns:
+            Path: The fully resolved path within the workspace.
+
+        Raises:
+            ValueError: If the resolved path is outside the workspace root.
         """
-        Finds line numbers matching a regex pattern, returning a dict with 'matches' and 'total'.
-        Optionally includes context lines around each match.
+        full_path = (self.workspace_root / path).resolve()
+        logger.debug(
+            f"Validating path: {path} -> {full_path} (workspace root: {self.workspace_root})"
+        )
+        if not str(full_path).startswith(str(self.workspace_root)):
+            raise ValueError(f"Path '{full_path}' is outside the workspace root.")
+        return full_path
+
+    def _parse_ripgrep_output(
+        self, output: str, max_results: int
+    ) -> List[Dict[str, Any]]:
+        """
+        Parse the text output from a ripgrep command into a structured list.
+
+        Args:
+            output (str): The raw stdout from ripgrep.
+            max_results (int): Maximum number of matches to return.
+
+        Returns:
+            List[Dict[str, Any]]: Each dict has:
+                "file" (str): the file path
+                "line" (int): the matching line number
+                "content" (str): the matching line text
+                "context_before" (List[str]): lines of context before the match
+                "context_after" (List[str]): lines of context after the match
         """
         matches = []
-        lines = content.splitlines()
-        try:
-            for match_obj in re.finditer(pattern, content, re.MULTILINE | re.DOTALL):
-                matched_text = match_obj.group(0)
-                start_index = match_obj.start()
-                prefix = content[:start_index]
-                start_line = prefix.count("\n") + 1
-                matched_lines = matched_text.count("\n")
-                end_line = start_line + matched_lines
+        current_file = None
+        current_match = None
 
-                context_start = max(0, start_line - context_lines - 1)
-                context_end = min(len(lines), end_line + context_lines)
-                context_snippet = lines[context_start:context_end]
+        for line in output.split("\n"):
+            if not line:
+                continue
+            if line.startswith("--"):
+                # This is a context separator in ripgrep output
+                continue
 
-                matches.append(
-                    {
-                        "match_line": start_line,
-                        "start_line": start_line,
-                        "end_line": end_line,
-                        "match": matched_text,
-                        "context": context_snippet,
+            # Expected format: "file_path:line_num:content"
+            # or optional context lines prefixed by ">"
+            if not line.startswith(">") and not line.startswith("<"):
+                parts = line.split(":", 2)
+                if len(parts) == 3:
+                    file_path, line_num_str, content = parts
+                    try:
+                        line_num = int(line_num_str)
+                    except ValueError:
+                        line_num = -1
+
+                    if current_file != file_path:
+                        current_file = file_path
+                        if len(matches) >= max_results:
+                            break
+
+                    current_match = {
+                        "file": file_path,
+                        "line": line_num,
+                        "content": content.strip(),
+                        "context_before": [],
+                        "context_after": [],
                     }
-                )
+                    matches.append(current_match)
+            else:
+                # If it's a context line, e.g. "> some text"
+                if current_match is not None:
+                    current_match["context_after"].append(line[1:].strip())
 
-            return {"matches": matches, "total": len(matches)}
-        except re.error as e:
-            return {"matches": [], "total": 0, "error": str(e)}
+        return matches
 
-    def _modify_lines(
+    def _grep_fallback(
         self,
-        content: str,
-        start_line: int,
-        end_line: int,
-        new_content: Optional[str] = None,
-    ) -> str:
+        pattern: str,
+        file_pattern: str,
+        case_sensitive: bool,
+        context_lines: int,
+        max_results: int,
+    ) -> List[Dict[str, Any]]:
         """
-        Replace or remove the specified line range in 'content'.
-        If 'new_content' is None, those lines are removed entirely.
+        Fallback mechanism using 'find' + 'grep' if ripgrep is unavailable or fails.
+
+        Steps:
+            1) Use find to gather candidate files.
+            2) Run grep on each file to locate matches.
+
+        Args:
+            pattern (str): The text/regex pattern to search for.
+            file_pattern (str): Glob pattern for files (e.g. "*.py").
+            case_sensitive (bool): Whether to make the search case-sensitive.
+            context_lines (int): Number of lines of context.
+            max_results (int): Maximum total matches to return.
+
+        Returns:
+            List[Dict[str, Any]]: A list of match dictionaries (same format as ripgrep parser).
         """
-        lines = content.splitlines(keepends=True)
-        start_idx = start_line - 1
-        end_idx = end_line - 1
+        # 1) Gather files via find
+        find_cmd = ["find", self.workspace_root.as_posix(), "-type", "f"]
+        if file_pattern and file_pattern != "*":
+            find_cmd.extend(["-name", file_pattern])
 
-        if new_content is None:
-            del lines[start_idx : end_idx + 1]
-        else:
-            replacement_lines = new_content.splitlines(keepends=True)
-            if replacement_lines and not replacement_lines[-1].endswith("\n"):
-                replacement_lines[-1] += "\n"
-            lines[start_idx : end_idx + 1] = replacement_lines
+        try:
+            find_res = subprocess.run(find_cmd, capture_output=True, text=True)
+            if find_res.returncode != 0:
+                logger.warning(f"Find error: {find_res.stderr}")
+                return []
+            files = [f for f in find_res.stdout.split("\n") if f.strip()]
+            if not files:
+                return []
 
-        return "".join(lines)
+            # 2) Grep them
+            matches = []
+            grep_cmd = ["grep", "-n"]  # -n => show line number
+            if not case_sensitive:
+                grep_cmd.append("-i")
+            if context_lines > 0:
+                grep_cmd.extend(["-C", str(context_lines)])
+
+            count = 0
+            for fpath in files:
+                if count >= max_results:
+                    break
+                cmd = grep_cmd + [pattern, fpath]
+                grep_res = subprocess.run(cmd, capture_output=True, text=True)
+                # grep returns 0 if matches found, 1 if none found, >1 on error
+                if grep_res.returncode not in (0, 1):
+                    continue
+
+                if grep_res.stdout:
+                    for line in grep_res.stdout.strip().split("\n"):
+                        # Handle both "filename:lineNum:content" and "lineNum:content" formats
+                        parts = line.split(":", 2)
+                        if len(parts) == 3:
+                            # Format: filename:lineNum:content
+                            _, ln_str, content = parts
+                        elif len(parts) == 2:
+                            # Format: lineNum:content
+                            ln_str, content = parts
+                        else:
+                            continue
+
+                        try:
+                            ln_val = int(ln_str)
+                        except ValueError:
+                            ln_val = -1
+
+                        matches.append(
+                            {
+                                "file": fpath,
+                                "line": ln_val,
+                                "content": content.strip(),
+                                "context_before": [],
+                                "context_after": [],
+                            }
+                        )
+                        count += 1
+                        if count >= max_results:
+                            break
+            return matches
+        except Exception as e:
+            logger.warning(f"Grep fallback error: {e}")
+            return []
+
+    def _run_search_command(
+        self,
+        pattern: str,
+        file_pattern: str,
+        case_sensitive: bool,
+        context_lines: int,
+        max_results: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        Attempts to run a search with ripgrep. If that fails or is not installed,
+        falls back to grep + find.
+
+        Args:
+            pattern (str): The text pattern to search for.
+            file_pattern (str): A glob for matching files (e.g. "*.py").
+            case_sensitive (bool): True if search is case-sensitive.
+            context_lines (int): Number of context lines to show.
+            max_results (int): Maximum matches to return.
+
+        Returns:
+            List[Dict[str, Any]]: A list of matches in a structured format.
+        """
+        # Build the ripgrep command
+        cmd = [
+            "rg",
+            "--line-number",
+            "--with-filename",
+            "--max-count",
+            str(max_results),
+        ]
+        if not case_sensitive:
+            cmd.append("--ignore-case")
+        if context_lines > 0:
+            cmd.extend(["--context", str(context_lines)])
+        if file_pattern and file_pattern != "*":
+            cmd.extend(["--glob", file_pattern])
+
+        cmd.append(pattern)
+        cmd.append(self.workspace_root.as_posix())
+
+        try:
+            rg_result = subprocess.run(cmd, capture_output=True, text=True)
+            if rg_result.returncode in (0, 1):
+                # 0 => found matches, 1 => no matches
+                if rg_result.stdout.strip():
+                    return self._parse_ripgrep_output(rg_result.stdout, max_results)
+                else:
+                    return []
+            else:
+                # Some other error code from ripgrep
+                logger.warning(f"Ripgrep error: {rg_result.stderr}")
+                # fallback
+                return self._grep_fallback(
+                    pattern, file_pattern, case_sensitive, context_lines, max_results
+                )
+        except FileNotFoundError:
+            # rg not installed
+            return self._grep_fallback(
+                pattern, file_pattern, case_sensitive, context_lines, max_results
+            )
+
+    def _format_search_results(self, results: List[Dict[str, Any]]) -> str:
+        """
+        Convert structured search results into a human-friendly output string.
+
+        Args:
+            results (List[Dict[str, Any]]): The matches from a search command.
+
+        Returns:
+            str: A formatted list of matches. If empty, returns "No matches found."
+        """
+        if not results:
+            return "No matches found."
+
+        output = []
+        current_file = None
+        for match in results:
+            if match["file"] != current_file:
+                current_file = match["file"]
+                rel_path = str(Path(current_file).relative_to(self.workspace_root))
+                output.append(f"\nFile: {rel_path}")
+            output.append(f"  {match['line']}: {match['content']}")
+            for ctx_line in match["context_after"]:
+                output.append(f"    {ctx_line}")
+
+        return "\n".join(output).strip()
 
     # -------------------------------------------------------------------------
-    # File/Directory Operations
+    # Public Plugin Methods
     # -------------------------------------------------------------------------
     @kernel_function(description="List the contents of a directory.")
     def list_dir(self, path: str = ".") -> str:
         """
-        List contents of the specified directory (files and subdirectories).
+        Lists directories and files within 'path'.
+
+        Args:
+            path (str, optional): Directory to list. Defaults to "." (workspace root).
+
+        Returns:
+            str: Formatted string showing subdirectories and files.
+
+        Examples:
+            >>> list_dir(".")
+            "Contents of /full/path:\nDirectories:\n  📁 folder/\nFiles:\n  📄 file.txt"
         """
         try:
             target_path = self._validate_path(path)
@@ -176,58 +360,91 @@ class CodeEditorPlugin:
             dirs = [e for e in entries if e.is_dir()]
             files = [e for e in entries if e.is_file()]
 
-            output = [f"Contents of {str(target_path)}:"]
-            output.append("\nDirectories:")
+            out = [f"Contents of {str(target_path)}:"]
+            out.append("\nDirectories:")
             for d in dirs:
-                output.append(f"  📁 {d.name}/")
-            output.append("\nFiles:")
+                out.append(f"  📁 {d.name}/")
+            out.append("\nFiles:")
             for f in files:
-                output.append(f"  📄 {f.name}")
-            return "\n".join(output)
+                out.append(f"  📄 {f.name}")
+            return "\n".join(out)
         except Exception as e:
             return f"Error listing directory: {str(e)}"
 
-    @kernel_function(description="Search for a pattern in the codebase using ripgrep.")
-    def codebase_search(self, query: str, target_dirs: str = "") -> str:
+    @kernel_function(
+        description="Recursively list directory contents in a tree format."
+    )
+    def tree_list(self, path: str = ".", max_depth: int = 2) -> str:
         """
-        Search the entire codebase for 'query' using ripgrep, optionally limited to 'target_dirs'.
+        Recursively shows a tree of directories/files up to 'max_depth' levels.
+
+        Args:
+            path (str, optional): Directory to start from. Defaults to ".".
+            max_depth (int, optional): How many subdirectory levels to descend. Defaults to 2.
+
+        Returns:
+            str: A text-based tree view of directories and files.
+
+        Examples:
+            >>> tree_list(".", max_depth=1)
+            "myproject/ (directory)\n  - setup.py (file)\n  - src/ (directory)"
         """
         try:
-            cmd = ["rg", "--smart-case", "--context", "2"]
-            if target_dirs.strip():
-                dirs = [
-                    self._validate_path(d.strip()).as_posix()
-                    for d in target_dirs.split(",")
-                ]
-                cmd.extend(dirs)
-            else:
-                cmd.append(self.workspace_root.as_posix())
-
-            cmd.append(query)
-            result = subprocess.run(cmd, capture_output=True, text=True)
-
-            if result.returncode not in (0, 1):
-                return f"Error searching codebase: {result.stderr.strip()}"
-
-            return result.stdout.strip() if result.stdout else "No matches found."
-        except FileNotFoundError:
-            return "Error: 'rg' (ripgrep) not installed or not found in PATH."
+            base_path = self._validate_path(path)
+            if not base_path.exists():
+                return f"Error: Path '{path}' does not exist."
         except Exception as e:
-            return f"Error searching codebase: {str(e)}"
+            return f"Error validating path: {str(e)}"
+
+        def _walk_tree(current_path: Path, depth: int) -> List[str]:
+            lines = []
+            entries = sorted(current_path.iterdir(), key=lambda e: e.name)
+            for e in entries:
+                indent = "  " * depth
+                if e.is_dir():
+                    lines.append(f"{indent}- {e.name}/ (directory)")
+                    if depth < max_depth:
+                        lines.extend(_walk_tree(e, depth + 1))
+                else:
+                    lines.append(f"{indent}- {e.name} (file)")
+            return lines
+
+        if base_path.is_file():
+            # If user provided a file, just show that item
+            return f"{base_path.name} (file)"
+        else:
+            output_lines = [f"{base_path.name}/ (directory)"]
+            if max_depth > 0:
+                output_lines.extend(_walk_tree(base_path, 1))
+            return "\n".join(output_lines)
 
     @kernel_function(description="Read the contents of a file.")
     def read_file(
         self, path: str, start_line: int = 1, end_line: Optional[int] = None
     ) -> str:
         """
-        Read the contents of 'path'. Optionally read lines [start_line, end_line] (1-based).
+        Reads 'path' in full or a specified line range [start_line, end_line].
+
+        Args:
+            path (str): Path to the file to read.
+            start_line (int, optional): The 1-based line number to start from. Defaults to 1.
+            end_line (int, optional): The 1-based line to end at. If None or <1, read to the end.
+
+        Returns:
+            str: The file content (or the requested slice).
+
+        Examples:
+            >>> read_file("agent.hcl")
+            # Returns the entire file
+            >>> read_file("script.sh", 10, 15)
+            # Returns lines 10-15
         """
         try:
             file_path = self._validate_path(path)
             if not file_path.is_file():
                 return f"Error: File '{path}' does not exist or is not a regular file."
 
-            with open(file_path, "r") as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
 
             if end_line is None or end_line < 1:
@@ -239,19 +456,27 @@ class CodeEditorPlugin:
         except Exception as e:
             return f"Error reading file: {str(e)}"
 
-    @kernel_function(
-        description="Write content to a file (overwriting existing content)."
-    )
+    @kernel_function(description="Write content to a file (overwriting).")
     def write_file(self, path: str, content: str) -> str:
         """
-        Overwrite the entire file at 'path' with 'content'. Creates parent dirs if necessary.
+        Overwrites the file at 'path' with 'content'.
+
+        Args:
+            path (str): The file path to write to.
+            content (str): The new content.
+
+        Returns:
+            str: Success message or error.
+
+        Examples:
+            >>> write_file("notes.txt", "Hello world!")
+            "Successfully wrote to file: notes.txt"
         """
         try:
             file_path = self._validate_path(path)
             file_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(file_path, "w") as f:
+            with open(file_path, "w", encoding="utf-8") as f:
                 f.write(content)
-
             return f"Successfully wrote to file: {path}"
         except Exception as e:
             return f"Error writing file: {str(e)}"
@@ -259,7 +484,20 @@ class CodeEditorPlugin:
     @kernel_function(description="Delete a file or directory.")
     def delete_file(self, path: str, recursive: bool = False) -> str:
         """
-        Delete 'path'. If 'path' is a directory, 'recursive=True' must be set to remove it fully.
+        Deletes a file or directory. For directories, 'recursive=True' is required.
+
+        Args:
+            path (str): The path to delete.
+            recursive (bool, optional): Whether to delete directories recursively. Defaults to False.
+
+        Returns:
+            str: Success or error message.
+
+        Examples:
+            >>> delete_file("temp.log")
+            "Successfully deleted file: temp.log"
+            >>> delete_file("old_project", recursive=True)
+            "Successfully deleted directory: old_project"
         """
         import shutil
 
@@ -284,8 +522,18 @@ class CodeEditorPlugin:
     @kernel_function(description="Run a shell command in the workspace.")
     def run_terminal_command(self, command: str, cwd: str = "") -> str:
         """
-        Execute a shell command in the workspace, optionally under subdirectory 'cwd'.
-        Returns combined stdout/stderr plus exit code message.
+        Executes a shell command in the workspace. Optionally in subdirectory 'cwd'.
+
+        Args:
+            command (str): The shell command to run.
+            cwd (str, optional): Subfolder in which to run the command. Defaults to "" (workspace root).
+
+        Returns:
+            str: Combined stdout/stderr plus an exit code message if non-zero.
+
+        Examples:
+            >>> run_terminal_command("ls -la", cwd="src")
+            # Returns the output from listing the 'src' folder.
         """
         try:
             work_dir = self._validate_path(cwd) if cwd else self.workspace_root
@@ -294,10 +542,10 @@ class CodeEditorPlugin:
             )
 
             output_parts = []
-            if result.stdout:
+            if result.stdout.strip():
                 output_parts.append("Output:")
                 output_parts.append(result.stdout.strip())
-            if result.stderr:
+            if result.stderr.strip():
                 output_parts.append("Errors:")
                 output_parts.append(result.stderr.strip())
             if result.returncode != 0:
@@ -310,126 +558,86 @@ class CodeEditorPlugin:
         except Exception as e:
             return f"Error executing command: {str(e)}"
 
-    # -------------------------------------------------------------------------
-    # Searching & Editing
-    # -------------------------------------------------------------------------
-    @kernel_function(description="Search for a regex pattern in files (like grep).")
-    def grep_search(
-        self, pattern: str, file_pattern: str = "*", case_sensitive: bool = False
+    @kernel_function(
+        description="Search for text in files. By default searches all files. Use file_pattern parameter to narrow search to specific file types (e.g. '*.extension')."
+    )
+    def search(
+        self,
+        query: str,
+        file_pattern: str = "*",
+        case_sensitive: bool = False,
+        context_lines: int = 2,
+        max_results: int = 25,
     ) -> str:
         """
-        Search for 'pattern' in all files matching 'file_pattern', with optional case sensitivity.
-        Tries ripgrep first, then falls back to standard grep.
+        Searches for 'query' in files matching 'file_pattern', returning lines with context.
+        If no matches are found with a specific file pattern, will suggest trying a broader search.
+
+        Args:
+            query (str): The text to search for.
+            file_pattern (str, optional): Glob for files to include (e.g. "*.extension"). Defaults to "*" for all files.
+            case_sensitive (bool, optional): Whether the search is case-sensitive. Defaults to False.
+            context_lines (int, optional): Number of lines of context around each match. Defaults to 2.
+            max_results (int, optional): Maximum matches to return. Defaults to 25.
+
+        Returns:
+            str: A formatted string with matching lines or a helpful message if no matches found.
+
+        Examples:
+            >>> search("model_temperature")
+            # Searches all files for the string "model_temperature"
+            >>> search("TODO", file_pattern="*.extension")
+            # Search for "TODO" in files with specific extension
+            >>> search("config")
+            # Search for "config" in all files
         """
         try:
-            cmd = ["rg", "--with-filename", "--line-number"]
-            if not case_sensitive:
-                cmd.append("--ignore-case")
-            cmd.extend(["--glob", file_pattern, "--context", "2", pattern])
-
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode not in (0, 1):
-                # fallback
-                if "not found" in result.stderr.lower():
-                    return self._grep_fallback(pattern, file_pattern, case_sensitive)
-                return f"Error during search: {result.stderr.strip()}"
-
-            return result.stdout.strip() if result.stdout else "No matches found."
-        except FileNotFoundError:
-            # fallback
-            return self._grep_fallback(pattern, file_pattern, case_sensitive)
+            results = self._run_search_command(
+                pattern=query,
+                file_pattern=file_pattern,
+                case_sensitive=case_sensitive,
+                context_lines=context_lines,
+                max_results=max_results,
+            )
+            if not results and file_pattern != "*":
+                # If no results found with specific file pattern, suggest trying all files
+                return f"No matches found in files matching '{file_pattern}'. Try searching all files with: search(\"{query}\")"
+            return self._format_search_results(results)
         except Exception as e:
             return f"Error during search: {str(e)}"
 
-    def _grep_fallback(
-        self, pattern: str, file_pattern: str, case_sensitive: bool
-    ) -> str:
+    @kernel_function(description="Line-based file editing.")
+    def edit_file(self, path: str, content: str = "", mode: str = "replace") -> str:
         """
-        Fallback to standard grep if rg is not available.
-        """
-        cmd = ["grep", "-rn"]
-        if not case_sensitive:
-            cmd.append("-i")
-        cmd.append(pattern)
+        Performs line-based edits on 'path' according to the specified mode.
 
-        find_cmd = [
-            "find",
-            self.workspace_root.as_posix(),
-            "-type",
-            "f",
-            "-name",
-            file_pattern,
-        ]
-        try:
-            find_proc = subprocess.run(find_cmd, capture_output=True, text=True)
-            if find_proc.returncode != 0:
-                return f"Error finding files for grep: {find_proc.stderr.strip()}"
+        Args:
+            path (str): The file to edit.
+            content (str, optional): The new text to insert or replace. Defaults to "".
+            mode (str, optional): One of:
+                "replace"  -> overwrite entire file
+                "append"   -> add content at the end
+                "prepend"  -> add content at the start
+                "insert:<line_num>" -> insert content at that line (1-based)
+                "replace:<line_num>" -> replace exactly that line
+                "replace:<start>-<end>" -> replace lines in [start, end]
+                "smart" -> naive best-match insertion point (if uncertain, appends)
 
-            matching_files = [m for m in find_proc.stdout.strip().split("\n") if m]
-            if not matching_files:
-                return "No matching files found."
+        Returns:
+            str: A success or error message.
 
-            results = []
-            for f in matching_files:
-                grep_proc = subprocess.run(cmd + [f], capture_output=True, text=True)
-                if grep_proc.returncode not in (0, 1):
-                    continue
-                if grep_proc.stdout:
-                    results.append(grep_proc.stdout.strip())
-
-            return "\n".join(results) if results else "No matches found."
-        except Exception as e:
-            return f"Error during grep fallback: {str(e)}"
-
-    @kernel_function(description="Search for files by name.")
-    def file_search(self, pattern: str) -> str:
-        """
-        Find files by name (shell glob). Example: '*.py' or 'myfile*.txt'.
-        """
-        try:
-            cmd = [
-                "find",
-                self.workspace_root.as_posix(),
-                "-type",
-                "f",
-                "-name",
-                pattern,
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-
-            if result.returncode != 0:
-                return f"Error searching files: {result.stderr.strip()}"
-
-            files = [f for f in result.stdout.strip().split("\n") if f]
-            if not files:
-                return "No matching files found."
-
-            output = ["Matching files:"]
-            for f in files:
-                rel_path = str(Path(f).relative_to(self.workspace_root))
-                output.append(f"  📄 {rel_path}")
-            return "\n".join(output)
-        except Exception as e:
-            return f"Error searching files: {str(e)}"
-
-    @kernel_function(description="Edit a file's contents with line-based operations.")
-    def edit_file(self, path: str, content: str = "", mode: str = "smart") -> str:
-        """
-        Perform line-based edits on 'path' using the following modes:
-          - "replace": overwrite entire file
-          - "append": add 'content' at the end
-          - "prepend": add 'content' at the beginning
-          - "insert:<line_num>": insert 'content' at 1-based line_num
-          - "replace:<line_num>": replace a single line
-          - "replace:<start>-<end>": replace all lines in [start, end]
-          - "smart": try to insert 'content' after the line with the highest word overlap
+        Examples:
+            >>> edit_file("config.hcl", content="variable \"debug_mode\" {...}", mode="append")
+            # Appends content to config.hcl
+            >>> edit_file("README.md", content="# My Project", mode="replace:1")
+            # Replaces line 1 with "# My Project"
         """
         try:
             file_path = self._validate_path(path)
             file_path.parent.mkdir(parents=True, exist_ok=True)
 
             if file_path.exists():
-                with open(file_path, "r") as f:
+                with open(file_path, "r", encoding="utf-8") as f:
                     existing_content = f.read()
             else:
                 existing_content = ""
@@ -440,7 +648,7 @@ class CodeEditorPlugin:
                 new_content = content
 
             elif mode == "append":
-                if not new_content.endswith("\n") and new_content:
+                if new_content and not new_content.endswith("\n"):
                     new_content += "\n"
                 new_content += content
 
@@ -451,87 +659,69 @@ class CodeEditorPlugin:
                 new_content = insertion + new_content
 
             elif mode.startswith("insert:"):
-                try:
-                    _, line_str = mode.split(":")
-                    line_num = int(line_str)
-                    lines = existing_content.splitlines()
-
-                    if line_num < 1:
-                        line_num = 1
-                    if line_num > len(lines) + 1:
-                        line_num = len(lines) + 1
-
-                    lines.insert(line_num - 1, content)
-                    new_content = "\n".join(lines)
-                    if existing_content.endswith("\n"):
-                        new_content += "\n"
-                except Exception as e:
-                    return f"Error inserting at line {line_str}: {str(e)}"
+                # insert:<line_num>
+                _, line_str = mode.split(":")
+                line_num = max(1, int(line_str))
+                lines = existing_content.splitlines()
+                if line_num > len(lines) + 1:
+                    line_num = len(lines) + 1
+                lines.insert(line_num - 1, content)
+                new_content = "\n".join(lines)
+                if existing_content.endswith("\n"):
+                    new_content += "\n"
 
             elif mode.startswith("replace:"):
-                try:
-                    _, spec = mode.split(":")
-                    lines = existing_content.splitlines()
+                # replace:<line_num> or replace:<start>-<end>
+                _, spec = mode.split(":")
+                lines = existing_content.splitlines()
 
-                    if "-" in spec:
-                        start_str, end_str = spec.split("-")
-                        start, end = int(start_str), int(end_str)
-                        start = max(1, start)
-                        end = min(len(lines), end)
-                        replacement_lines = content.splitlines()
-                        lines[start - 1 : end] = replacement_lines
-                    else:
-                        line_num = int(spec)
-                        if line_num < 1:
-                            line_num = 1
-                        if line_num > len(lines):
-                            line_num = len(lines)
-                        lines[line_num - 1] = content
+                if "-" in spec:
+                    start_str, end_str = spec.split("-")
+                    start = max(1, int(start_str))
+                    end = min(len(lines), int(end_str))
+                    replacement_lines = content.splitlines()
+                    lines[start - 1 : end] = replacement_lines
+                else:
+                    line_num = max(1, int(spec))
+                    if line_num > len(lines):
+                        line_num = len(lines)
+                    lines[line_num - 1] = content
 
-                    new_content = "\n".join(lines)
-                    if existing_content.endswith("\n"):
-                        new_content += "\n"
-                except Exception as e:
-                    return f"Error parsing replace mode: {str(e)}"
+                new_content = "\n".join(lines)
+                if existing_content.endswith("\n"):
+                    new_content += "\n"
 
             elif mode == "smart":
-                try:
-                    if not existing_content.strip():
-                        new_content = content
+                if not existing_content.strip():
+                    new_content = content
+                else:
+                    lines = existing_content.splitlines()
+                    content_lines = content.splitlines()
+                    best_index = -1
+                    best_score = 0
+                    # Attempt to find the line with the largest word overlap
+                    for i, line in enumerate(lines):
+                        score = 0
+                        for c_line in content_lines:
+                            common = set(line.split()) & set(c_line.split())
+                            score += len(common)
+                        if score > best_score:
+                            best_score = score
+                            best_index = i
+                    if best_index >= 0:
+                        lines.insert(best_index + 1, content)
+                        new_content = "\n".join(lines)
+                        if existing_content.endswith("\n"):
+                            new_content += "\n"
                     else:
-                        lines = existing_content.splitlines()
-                        content_lines = content.splitlines()
-                        best_match_index = -1
-                        best_score = 0
-
-                        for i, line in enumerate(lines):
-                            score = 0
-                            for new_line in content_lines:
-                                common = set(line.split()) & set(new_line.split())
-                                score += len(common)
-                            if score > best_score:
-                                best_score = score
-                                best_match_index = i
-
-                        if best_match_index >= 0:
-                            lines.insert(best_match_index + 1, content)
-                            new_content = "\n".join(lines)
-                            if existing_content.endswith("\n"):
-                                new_content += "\n"
-                        else:
-                            # fallback to append
-                            if new_content and not new_content.endswith("\n"):
-                                new_content += "\n"
-                            new_content += content
-
-                except Exception as e:
-                    return f"Error in smart edit mode: {str(e)}"
-
+                        # fallback to append
+                        if new_content and not new_content.endswith("\n"):
+                            new_content += "\n"
+                        new_content += content
             else:
                 return f"Invalid mode: '{mode}'."
 
-            # Write final content
-            with open(file_path, "w") as f:
+            with open(file_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
 
             return f"Successfully edited file: {path}"
@@ -541,14 +731,26 @@ class CodeEditorPlugin:
     @kernel_function(description="Remove lines from a file by line number/count.")
     def remove_lines(self, path: str, start_line: int, num_lines: int = 1) -> str:
         """
-        Remove 'num_lines' lines starting at 1-based 'start_line' in 'path'.
+        Removes a block of lines starting at 'start_line' (1-based), for 'num_lines' lines.
+
+        Args:
+            path (str): The file to edit.
+            start_line (int): The first line to remove (1-based).
+            num_lines (int, optional): How many lines to remove. Defaults to 1.
+
+        Returns:
+            str: A success or error message.
+
+        Examples:
+            >>> remove_lines("notes.txt", 5, 3)
+            # Removes lines 5, 6, and 7 from notes.txt
         """
         try:
             file_path = self._validate_path(path)
             if not file_path.exists():
                 return f"Error: File '{path}' does not exist."
 
-            with open(file_path, "r") as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
 
             if start_line < 1 or start_line > len(lines):
@@ -558,34 +760,38 @@ class CodeEditorPlugin:
             end_idx = min(start_idx + num_lines, len(lines))
             del lines[start_idx:end_idx]
 
-            with open(file_path, "w") as f:
+            with open(file_path, "w", encoding="utf-8") as f:
                 f.writelines(lines)
 
-            removed_count = end_idx - start_idx
-            return f"Successfully removed {removed_count} line(s) from {path}"
+            removed = end_idx - start_idx
+            return f"Successfully removed {removed} line(s) from {path}"
         except Exception as e:
             return f"Error removing lines: {str(e)}"
 
-    @kernel_function(
-        description="Edit file content with regex-based text manipulation."
-    )
+    @kernel_function(description="Regex-based file editing.")
     def pattern_edit(
-        self,
-        path: str,
-        pattern: str,
-        new_content: str = "",
-        mode: str = "replace",
-        match_type: str = "custom",
-        match_params: Optional[Dict[str, Any]] = None,
+        self, path: str, pattern: str, new_content: str = "", mode: str = "replace"
     ) -> str:
         """
-        Regex-based editing of 'path'. If 'match_type' != 'custom', provide 'match_params'
-        to auto-generate the pattern. The recognized 'mode' options:
+        Edits text in a file by matching a regex pattern and modifying those matches.
 
-         - "remove": Delete matched text
-         - "replace": Replace matched text with 'new_content'
-         - "before": Insert 'new_content' before each matched section
-         - "after": Insert 'new_content' after each matched section
+        Args:
+            path (str): The file to edit.
+            pattern (str): A regex pattern to match.
+            new_content (str, optional): The text to use in "replace", "before", or "after". Defaults to "".
+            mode (str, optional): One of:
+                - "remove": delete matched text
+                - "replace": replace matched text with new_content
+                - "before": insert new_content before each match
+                - "after": insert new_content after each match
+              Defaults to "replace".
+
+        Returns:
+            str: Success message, including how many matches were changed.
+
+        Examples:
+            >>> pattern_edit("config.ini", r"(?i)username\s*=\s*\S+", "username = new_user")
+            # Replaces any line with "username = something" (case-insensitive)
         """
         try:
             valid_modes = ["remove", "replace", "before", "after"]
@@ -596,222 +802,40 @@ class CodeEditorPlugin:
             if not file_path.exists():
                 return f"Error: File '{path}' does not exist."
 
-            # If user wants an auto-generated pattern
-            if match_type != "custom":
-                match_params = match_params or {}
-                pattern = self._generate_pattern(match_type, **match_params)
+            with open(file_path, "r", encoding="utf-8") as f:
+                original = f.read()
 
-            with open(file_path, "r") as f:
-                original_content = f.read()
-
-            match_data = self._find_line_numbers(original_content, pattern)
-            if "error" in match_data:
-                return f"Error in pattern: {match_data['error']}"
-            if not match_data["matches"]:
+            matches = list(re.finditer(pattern, original, flags=re.MULTILINE))
+            if not matches:
                 return "No matches found."
 
-            lines = original_content.splitlines(keepends=True)
-            changes_made = 0
-
-            # Process in reverse order so line indexing doesn't shift
-            for match in reversed(match_data["matches"]):
-                start_idx = match["start_line"] - 1
-                end_idx = match["end_line"] - 1
-
+            new_text = original
+            for m in reversed(matches):
+                start_idx, end_idx = m.span()
                 if mode == "remove":
-                    del lines[start_idx : end_idx + 1]
+                    new_text = new_text[:start_idx] + new_text[end_idx:]
                 elif mode == "replace":
-                    inserted = new_content.splitlines(keepends=True)
-                    lines[start_idx : end_idx + 1] = inserted
+                    new_text = new_text[:start_idx] + new_content + new_text[end_idx:]
                 elif mode == "before":
-                    lines[start_idx:start_idx] = new_content.splitlines(keepends=True)
+                    new_text = new_text[:start_idx] + new_content + new_text[start_idx:]
                 elif mode == "after":
-                    lines[end_idx + 1 : end_idx + 1] = new_content.splitlines(
-                        keepends=True
-                    )
+                    new_text = new_text[:end_idx] + new_content + new_text[end_idx:]
 
-                changes_made += 1
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(new_text)
 
-            with open(file_path, "w") as f:
-                f.writelines(lines)
-
-            return (
-                f"Successfully edited file: {path} ({changes_made} match(es) updated)"
-            )
+            return f"Successfully edited file: {path} ({len(matches)} match(es))"
+        except re.error as re_err:
+            return f"Regex error: {str(re_err)}"
         except Exception as e:
-            return f"Error editing file with pattern: {str(e)}"
+            return f"Error in pattern_edit: {str(e)}"
 
-    # -------------------------------------------------------------------------
-    # Linting / Formatting / Analysis
-    # -------------------------------------------------------------------------
-    @kernel_function(
-        description="Analyze a Python file for imports, functions, and classes."
-    )
-    def analyze_code(self, path: str) -> str:
-        """
-        Basic structural analysis of Python code:
-          - Import statements
-          - Function definitions
-          - Class definitions
-        """
-        try:
-            file_path = self._validate_path(path)
-            if not file_path.is_file():
-                return f"Error: File '{path}' does not exist or is not a regular file."
-
-            with open(file_path, "r") as f:
-                content = f.read()
-
-            import_pattern = r"^(?:from\s+[\w.]+\s+)?import\s+[\w.]+(?:\s+as\s+\w+)?"
-            func_pattern = r"def\s+(\w+)\s*\([^)]*\):"
-            class_pattern = r"class\s+(\w+)(?:\([^)]*\))?:"
-
-            imports = re.findall(import_pattern, content, re.MULTILINE)
-            functions = re.findall(func_pattern, content)
-            classes = re.findall(class_pattern, content)
-
-            results = ["Code Analysis:"]
-            results.append("\nImports:")
-            for imp in imports:
-                results.append(f"  - {imp.strip()}")
-            results.append("\nFunctions:")
-            for func in functions:
-                results.append(f"  - {func}()")
-            results.append("\nClasses:")
-            for cls in classes:
-                results.append(f"  - {cls}")
-            return "\n".join(results)
-        except Exception as e:
-            return f"Error analyzing code: {str(e)}"
-
-    @kernel_function(description="Format code using a suitable formatter if available.")
-    def format_code(self, path: str) -> str:
-        """
-        Attempt to format a code file:
-          - 'black' for Python (.py)
-          - 'prettier' for .js, .jsx, .ts, .tsx
-        """
-        try:
-            file_path = self._validate_path(path)
-            if not file_path.is_file():
-                return f"Error: File '{path}' does not exist or is not a file."
-
-            # Determine correct formatter
-            if file_path.suffix == ".py":
-                cmd = ["black", str(file_path)]
-            elif file_path.suffix in [".js", ".jsx", ".ts", ".tsx"]:
-                cmd = ["prettier", "--write", str(file_path)]
-            else:
-                return f"No formatter available for '*{file_path.suffix}' files."
-
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                return f"Error formatting file: {result.stderr.strip()}"
-
-            return f"Successfully formatted '{path}'."
-        except FileNotFoundError:
-            return "Formatter not found. Install 'black' or 'prettier' as needed."
-        except Exception as e:
-            return f"Error formatting code: {str(e)}"
-
-    @kernel_function(description="Check code for issues using a linter.")
-    def lint_code(self, path: str) -> str:
-        """
-        Run a linter on 'path':
-          - 'flake8' for Python
-          - 'eslint' for JavaScript/JSX
-        """
-        try:
-            file_path = self._validate_path(path)
-            if not file_path.is_file():
-                return f"Error: File '{path}' does not exist or is not a file."
-
-            if file_path.suffix == ".py":
-                cmd = ["flake8", str(file_path)]
-            elif file_path.suffix in [".js", ".jsx"]:
-                cmd = ["eslint", str(file_path)]
-            else:
-                return f"No linter available for '*{file_path.suffix}' files."
-
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            return (
-                result.stdout.strip() if result.stdout else "No linting issues found."
-            )
-        except FileNotFoundError:
-            return "Linter not found. Install 'flake8' or 'eslint' as appropriate."
-        except Exception as e:
-            return f"Error linting code: {str(e)}"
-
-    @kernel_function(
-        description="Recursively list directory contents in a structured tree format."
-    )
-    def tree_list(self, path: str = ".", max_depth: int = 2) -> str:
-        """
-        Recursively list directories and files under 'path' in a more structured tree, up to 'max_depth' levels.
-        Markdown-style example:
-        .
-        ├── .file
-        ├── .folder/
-        │   └── subfolder/
-        └── .file/
-
-        :param path: Base directory to list
-        :param max_depth: How many levels of subdirectories to include
-        :return: A string with a structured, markdown-friendly view of the directory contents
-        """
-        try:
-            base_path = self._validate_path(path)
-            if not base_path.exists():
-                return f"Error: Path '{path}' does not exist."
-        except Exception as e:
-            return f"Error validating path: {str(e)}"
-
-        def _walk_tree(current_path: Path, depth: int) -> List[str]:
-            """
-            Inner helper for recursively gathering directory contents up to 'max_depth'.
-            Returns a list of lines in markdown-like structured format.
-            """
-            entries = sorted(current_path.iterdir(), key=lambda e: e.name)
-            lines = []
-
-            for entry in entries:
-                # Indentation: 2 spaces per depth level
-                indent = "  " * (depth - 1)
-                # Mark directories vs. files
-                if entry.is_dir():
-                    line_text = f"{indent}- **{entry.name}/** (directory)"
-                else:
-                    line_text = f"{indent}- **{entry.name}** (file)"
-
-                lines.append(line_text)
-
-                if entry.is_dir() and depth < max_depth:
-                    # Recurse into subdirectory
-                    sub_lines = _walk_tree(entry, depth + 1)
-                    lines.extend(sub_lines)
-
-            return lines
-
-        # Start building the output
-        if base_path.is_file():
-            # If the user specified a file, just show that item
-            return f"**{base_path.name}** (file)"
-        else:
-            # It's a directory; show its name at the top
-            lines_out = [f"**{base_path.name}/** (directory)"]
-            if max_depth > 0:
-                sub_lines = _walk_tree(base_path, 1)
-                lines_out.extend(sub_lines)
-
-            return "\n".join(lines_out)
-
-    # -------------------------------------------------------------------------
-    # Instructions
-    # -------------------------------------------------------------------------
     @kernel_function(description="Get the plugin usage instructions.")
     def get_instructions(self) -> str:
         """
-        Return the plugin usage guidelines, including how to do line-based
-        vs. pattern-based editing, and any recommended workflow steps.
+        Returns a high-level usage guide for this generic code editor plugin.
+
+        Returns:
+            str: The recommended workflow steps and usage details.
         """
         return self.PLUGIN_INSTRUCTIONS
