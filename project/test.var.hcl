@@ -5,5 +5,5 @@ model_settings = {
   context_window = 16385
   top_p = 0.95
 }
-model_provider = "ollama"
-model_name = "dolphin-mixtral:8x7b"
+model_provider = "openai"
+model_name = "gpt-4o"
