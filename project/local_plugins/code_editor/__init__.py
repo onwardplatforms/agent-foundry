@@ -2,8 +2,11 @@ import logging
 import os
 import re
 import subprocess
+import json
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any, Union, Literal
 
 try:
     from semantic_kernel.functions.kernel_function_decorator import kernel_function
@@ -17,6 +20,118 @@ except ImportError:
 
 
 logger = logging.getLogger(__name__)
+
+
+class ChangeType(Enum):
+    DELETE = "delete"
+    UPDATE = "update"
+    INSERT = "insert"
+
+
+@dataclass
+class Change:
+    """Represents a single change to a file"""
+
+    file_path: str
+    change_type: ChangeType
+    start_line: int  # 1-based
+    end_line: int  # 1-based, inclusive
+    new_content: Optional[str] = None
+    previous_content: Optional[str] = None
+
+    def __post_init__(self):
+        if self.start_line < 1:
+            raise ValueError("start_line must be >= 1")
+        if self.end_line < self.start_line:
+            raise ValueError("end_line must be >= start_line")
+        if (
+            self.change_type in (ChangeType.UPDATE, ChangeType.INSERT)
+            and not self.new_content
+        ):
+            raise ValueError("new_content required for UPDATE and INSERT changes")
+
+
+@dataclass
+class FileState:
+    """Maintains the state of a file through multiple changes"""
+
+    file_path: str
+    original_content: str
+    current_content: str
+    pending_changes: List[Change]
+    applied_changes: List[Change]
+
+    @classmethod
+    def from_file(cls, file_path: str) -> "FileState":
+        """Create a FileState from a file path"""
+        with open(file_path, "r") as f:
+            content = f.read()
+        return cls(
+            file_path=file_path,
+            original_content=content,
+            current_content=content,
+            pending_changes=[],
+            applied_changes=[],
+        )
+
+    def add_change(self, change: Change) -> None:
+        """Add a change to pending changes"""
+        self.pending_changes.append(change)
+
+    def apply_pending_changes(self) -> None:
+        """Apply all pending changes in order"""
+        for change in self.pending_changes:
+            self._apply_change(change)
+        self.applied_changes.extend(self.pending_changes)
+        self.pending_changes.clear()
+
+    def revert_last_change(self) -> None:
+        """Revert the most recently applied change"""
+        if not self.applied_changes:
+            return
+
+        change = self.applied_changes.pop()
+        if change.previous_content is not None:
+            lines = self.current_content.splitlines()
+            lines[change.start_line - 1 : change.end_line] = (
+                change.previous_content.splitlines()
+            )
+            self.current_content = "\n".join(lines)
+            if self.current_content and not self.current_content.endswith("\n"):
+                self.current_content += "\n"
+
+    def revert_all_changes(self) -> None:
+        """Revert all changes and restore original content"""
+        self.current_content = self.original_content
+        self.applied_changes.clear()
+        self.pending_changes.clear()
+
+    def save(self) -> None:
+        """Save current content back to file"""
+        with open(self.file_path, "w") as f:
+            f.write(self.current_content)
+
+    def _apply_change(self, change: Change) -> None:
+        """Apply a single change to current_content"""
+        lines = self.current_content.splitlines()
+
+        # Store previous content for potential revert
+        change.previous_content = "\n".join(
+            lines[change.start_line - 1 : change.end_line]
+        )
+
+        if change.change_type == ChangeType.DELETE:
+            del lines[change.start_line - 1 : change.end_line]
+        elif change.change_type == ChangeType.UPDATE:
+            lines[change.start_line - 1 : change.end_line] = (
+                change.new_content.splitlines()
+            )
+        elif change.change_type == ChangeType.INSERT:
+            lines.insert(change.start_line - 1, change.new_content)
+
+        self.current_content = "\n".join(lines)
+        if self.current_content and not self.current_content.endswith("\n"):
+            self.current_content += "\n"
 
 
 class CodeEditorPlugin:
@@ -37,38 +152,37 @@ class CodeEditorPlugin:
 
     1) Inspect the Project
     - Use `list_dir()` or `tree_list()` to see how files and folders are organized.
-    - Use `search("<keyword>")` to locate references to important terms or functions.
+    - Use `search()` to locate references to important terms or functions.
 
-    2) Read and Plan
-    - Once you identify relevant files, call `read_file()` to examine specific lines or the entire file.
-    - Decide if you need line-based edits or regex-based transformations.
+    2) Analyze and Plan
+    - Use `analyze_changes()` to determine what needs to be changed
+    - Read files with `read_file()` to understand context
+    - Plan changes in the correct order to handle line number shifts
 
-    3) Make Edits
-    - For line-based changes (inserting, replacing, removing lines), use `edit_file()`.
-    - For pattern-based changes (renaming a function, removing trailing whitespace, etc.), use `pattern_edit()`.
-    - If you only need to drop a block of lines, `remove_lines()` is handy.
+    3) Make Changes
+    - Use `delete_range()` to remove code blocks
+    - Use `update_range()` to modify existing code
+    - Use `insert_code()` to add new code
 
-    4) Validate Your Work
-    - Re-read the updated files with `read_file()` or run a quick `search()` to confirm your changes are present.
-    - Run shell commands or tests with `run_terminal_command()` if you need to verify the build, lint the code, or run tests.
-
-    5) Conclude and Clean Up
-    - If any files or directories are no longer needed, remove them with `delete_file()`.
-    - Provide a final summary of changes to the user, including any next steps or discovered issues.
+    4) Verify Changes
+    - Use `verify_changes()` to check syntax and references
+    - Re-read files to confirm changes
+    - Run tests or linting as needed
     """
 
     def __init__(self, workspace: Optional[str] = None):
-        """
-        Initializes the CodeEditorPlugin with a specified workspace root directory.
-
-        Args:
-            workspace (str, optional): The path to the workspace root. If omitted,
-                defaults to the current working directory.
-        """
+        """Initialize with workspace root directory."""
         self.workspace_root = Path(workspace or os.getcwd()).resolve()
+        self._file_states: Dict[str, FileState] = {}
         logger.info(
             f"CodeEditorPlugin initialized with workspace root: {self.workspace_root}"
         )
+
+    def _get_file_state(self, path: str) -> FileState:
+        """Get or create FileState for a file."""
+        if path not in self._file_states:
+            self._file_states[path] = FileState.from_file(path)
+        return self._file_states[path]
 
     # -------------------------------------------------------------------------
     # Internal Helpers
@@ -333,6 +447,138 @@ class CodeEditorPlugin:
 
         return "\n".join(output).strip()
 
+    def _find_references(
+        self, content: str, target: str, file_pattern: str = "*"
+    ) -> List[Dict[str, Any]]:
+        """
+        Find references to a given target in the codebase.
+        This is a more thorough search that looks for various ways a symbol might be referenced.
+
+        Args:
+            content (str): The content/symbol to search for
+            target (str): Additional context about what we're looking for (e.g., "variable", "function")
+            file_pattern (str): Optional file pattern to limit the search
+
+        Returns:
+            List[Dict[str, Any]]: List of matches with file and line information
+        """
+        # Create variations of how the target might be referenced
+        variations = [
+            content,  # exact match
+            f"{content}\\s*=",  # assignments
+            f"{content}\\.",  # property access
+            f"\\.{content}\\b",  # method calls
+            f"\\b{content}\\b",  # word boundaries
+            f"['\"]{content}['\"]",  # string literals
+        ]
+
+        # Combine variations into a single regex pattern
+        pattern = "|".join(f"({v})" for v in variations)
+
+        # Use the existing search infrastructure
+        return self._run_search_command(
+            pattern=pattern,
+            file_pattern=file_pattern,
+            case_sensitive=True,
+            context_lines=1,
+            max_results=100,  # Higher limit for references
+        )
+
+    def _adjust_line_number(
+        self, original_line: int, previous_changes: List[tuple[int, int]]
+    ) -> int:
+        """
+        Adjusts a line number based on previous changes to the file.
+
+        Args:
+            original_line (int): The original 1-based line number
+            previous_changes (List[tuple[int, int]]): List of (start_line, num_lines_removed) tuples
+                                                    representing previous changes
+
+        Returns:
+            int: The adjusted line number accounting for previous changes
+        """
+        adjustment = 0
+        for start, count in previous_changes:
+            if start < original_line:  # If this change was before our target line
+                adjustment += count  # Adjust by the number of lines removed
+        return max(1, original_line - adjustment)
+
+    def _find_block_boundaries(
+        self, lines: List[str], start_line: int
+    ) -> tuple[int, int]:
+        """
+        Find the complete boundaries of a block starting from a given line.
+        Handles nested blocks and proper brace matching.
+
+        Args:
+            lines (List[str]): All lines of the file
+            start_line (int): 1-based line number where we found a match
+
+        Returns:
+            tuple[int, int]: Start and end line numbers (1-based, inclusive)
+        """
+        # Convert to 0-based index
+        idx = start_line - 1
+
+        # Look backwards for the block start
+        while idx > 0:
+            line = lines[idx].strip()
+            if line.endswith("{"):
+                # Found potential block start, verify it's a complete declaration
+                prev_line = lines[idx - 1].strip()
+                if prev_line.startswith("variable") or prev_line.startswith("model"):
+                    idx -= 1  # Include the declaration line
+                break
+            idx -= 1
+
+        block_start = idx
+
+        # Look forward for the block end
+        brace_count = 0
+        idx = block_start
+        while idx < len(lines):
+            line = lines[idx].strip()
+            brace_count += line.count("{") - line.count("}")
+            if brace_count == 0 and line == "}":
+                break
+            idx += 1
+
+        block_end = idx
+
+        # Convert back to 1-based line numbers
+        return (block_start + 1, block_end + 1)
+
+    def _find_all_references(
+        self, lines: List[str], symbol: str
+    ) -> List[tuple[int, int]]:
+        """
+        Find all references to a symbol in the file, including its definition block.
+        Returns ranges in reverse order (bottom to top) for safe removal.
+
+        Args:
+            lines (List[str]): All lines of the file
+            symbol (str): The symbol to find references for
+
+        Returns:
+            List[tuple[int, int]]: List of (start_line, end_line) tuples in reverse order
+        """
+        ranges = []
+
+        # First pass: find all lines containing the symbol
+        for i, line in enumerate(lines, 1):
+            if symbol in line:
+                if "variable" in line and symbol in line:
+                    # This is the variable definition block
+                    start, end = self._find_block_boundaries(lines, i)
+                    ranges.append((start, end))
+                elif "=" in line and symbol in line:
+                    # This is a reference/usage
+                    ranges.append((i, i))
+
+        # Sort in reverse order so we can remove from bottom to top
+        return sorted(ranges, reverse=True)
+
     # -------------------------------------------------------------------------
     # Public Plugin Methods
     # -------------------------------------------------------------------------
@@ -584,8 +830,6 @@ class CodeEditorPlugin:
             str: A formatted string with matching lines or a helpful message if no matches found.
 
         Examples:
-            >>> search("model_temperature")
-            # Searches all files for the string "model_temperature"
             >>> search("TODO", file_pattern="*.extension")
             # Search for "TODO" in files with specific extension
             >>> search("config")
@@ -606,236 +850,308 @@ class CodeEditorPlugin:
         except Exception as e:
             return f"Error during search: {str(e)}"
 
-    @kernel_function(description="Line-based file editing.")
-    def edit_file(self, path: str, content: str = "", mode: str = "replace") -> str:
+    @kernel_function(description="Analyze code to determine required changes.")
+    def analyze_changes(self, path: str, query: str) -> str:
         """
-        Performs line-based edits on 'path' according to the specified mode.
+        Analyzes a file to determine what changes are needed based on a query.
+        Uses LLM to understand code structure and dependencies.
 
         Args:
-            path (str): The file to edit.
-            content (str, optional): The new text to insert or replace. Defaults to "".
-            mode (str, optional): One of:
-                "replace"  -> overwrite entire file
-                "append"   -> add content at the end
-                "prepend"  -> add content at the start
-                "insert:<line_num>" -> insert content at that line (1-based)
-                "replace:<line_num>" -> replace exactly that line
-                "replace:<start>-<end>" -> replace lines in [start, end]
-                "smart" -> naive best-match insertion point (if uncertain, appends)
+            path (str): The file to analyze
+            query (str): Description of the changes needed
 
         Returns:
-            str: A success or error message.
-
-        Examples:
-            >>> edit_file("config.hcl", content="variable \"debug_mode\" {...}", mode="append")
-            # Appends content to config.hcl
-            >>> edit_file("README.md", content="# My Project", mode="replace:1")
-            # Replaces line 1 with "# My Project"
-        """
-        try:
-            file_path = self._validate_path(path)
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-
-            if file_path.exists():
-                with open(file_path, "r", encoding="utf-8") as f:
-                    existing_content = f.read()
-            else:
-                existing_content = ""
-
-            new_content = existing_content
-
-            if mode == "replace":
-                new_content = content
-
-            elif mode == "append":
-                if new_content and not new_content.endswith("\n"):
-                    new_content += "\n"
-                new_content += content
-
-            elif mode == "prepend":
-                insertion = content
-                if insertion and not insertion.endswith("\n"):
-                    insertion += "\n"
-                new_content = insertion + new_content
-
-            elif mode.startswith("insert:"):
-                # insert:<line_num>
-                _, line_str = mode.split(":")
-                line_num = max(1, int(line_str))
-                lines = existing_content.splitlines()
-                if line_num > len(lines) + 1:
-                    line_num = len(lines) + 1
-                lines.insert(line_num - 1, content)
-                new_content = "\n".join(lines)
-                if existing_content.endswith("\n"):
-                    new_content += "\n"
-
-            elif mode.startswith("replace:"):
-                # replace:<line_num> or replace:<start>-<end>
-                _, spec = mode.split(":")
-                lines = existing_content.splitlines()
-
-                if "-" in spec:
-                    start_str, end_str = spec.split("-")
-                    start = max(1, int(start_str))
-                    end = min(len(lines), int(end_str))
-                    replacement_lines = content.splitlines()
-                    lines[start - 1 : end] = replacement_lines
-                else:
-                    line_num = max(1, int(spec))
-                    if line_num > len(lines):
-                        line_num = len(lines)
-                    lines[line_num - 1] = content
-
-                new_content = "\n".join(lines)
-                if existing_content.endswith("\n"):
-                    new_content += "\n"
-
-            elif mode == "smart":
-                if not existing_content.strip():
-                    new_content = content
-                else:
-                    lines = existing_content.splitlines()
-                    content_lines = content.splitlines()
-                    best_index = -1
-                    best_score = 0
-                    # Attempt to find the line with the largest word overlap
-                    for i, line in enumerate(lines):
-                        score = 0
-                        for c_line in content_lines:
-                            common = set(line.split()) & set(c_line.split())
-                            score += len(common)
-                        if score > best_score:
-                            best_score = score
-                            best_index = i
-                    if best_index >= 0:
-                        lines.insert(best_index + 1, content)
-                        new_content = "\n".join(lines)
-                        if existing_content.endswith("\n"):
-                            new_content += "\n"
-                    else:
-                        # fallback to append
-                        if new_content and not new_content.endswith("\n"):
-                            new_content += "\n"
-                        new_content += content
-            else:
-                return f"Invalid mode: '{mode}'."
-
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(new_content)
-
-            return f"Successfully edited file: {path}"
-        except Exception as e:
-            return f"Error editing file: {str(e)}"
-
-    @kernel_function(description="Remove lines from a file by line number/count.")
-    def remove_lines(self, path: str, start_line: int, num_lines: int = 1) -> str:
-        """
-        Removes a block of lines starting at 'start_line' (1-based), for 'num_lines' lines.
-
-        Args:
-            path (str): The file to edit.
-            start_line (int): The first line to remove (1-based).
-            num_lines (int, optional): How many lines to remove. Defaults to 1.
-
-        Returns:
-            str: A success or error message.
-
-        Examples:
-            >>> remove_lines("notes.txt", 5, 3)
-            # Removes lines 5, 6, and 7 from notes.txt
+            str: JSON-formatted analysis of required changes
         """
         try:
             file_path = self._validate_path(path)
             if not file_path.exists():
                 return f"Error: File '{path}' does not exist."
 
-            with open(file_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
+            with open(file_path, "r") as f:
+                content = f.read()
 
-            if start_line < 1 or start_line > len(lines):
-                return f"Invalid start line: {start_line}"
+            # TODO: Integrate with LLM for intelligent analysis
+            analysis = {"changes": [], "dependencies": [], "warnings": []}
 
-            start_idx = start_line - 1
-            end_idx = min(start_idx + num_lines, len(lines))
-            del lines[start_idx:end_idx]
+            return json.dumps(analysis, indent=2)
 
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.writelines(lines)
-
-            removed = end_idx - start_idx
-            return f"Successfully removed {removed} line(s) from {path}"
         except Exception as e:
-            return f"Error removing lines: {str(e)}"
+            return f"Error analyzing changes: {str(e)}"
 
-    @kernel_function(description="Regex-based file editing.")
-    def pattern_edit(
-        self, path: str, pattern: str, new_content: str = "", mode: str = "replace"
+    @kernel_function(description="Delete a range of lines from a file.")
+    def delete_range(self, path: str, start_line: int, end_line: int) -> str:
+        """
+        Deletes a range of lines from a file, maintaining proper spacing.
+        Uses FileState to track changes and enable reverting.
+
+        Args:
+            path (str): The file to modify
+            start_line (int): First line to delete (1-based)
+            end_line (int): Last line to delete (1-based, inclusive)
+
+        Returns:
+            str: JSON-formatted result with deleted content
+        """
+        try:
+            file_state = self._get_file_state(path)
+
+            change = Change(
+                file_path=path,
+                change_type=ChangeType.DELETE,
+                start_line=start_line,
+                end_line=end_line,
+            )
+
+            file_state.add_change(change)
+            file_state.apply_pending_changes()
+            file_state.save()
+
+            result = {
+                "action": "delete",
+                "start_line": start_line,
+                "end_line": end_line,
+                "deleted_content": change.previous_content,
+            }
+
+            return json.dumps(result, indent=2)
+
+        except Exception as e:
+            return f"Error deleting range: {str(e)}"
+
+    @kernel_function(description="Update a range of lines in a file.")
+    def update_range(
+        self, path: str, start_line: int, end_line: int, new_content: str
     ) -> str:
         """
-        Edits text in a file by matching a regex pattern and modifying those matches.
+        Updates a range of lines in a file, tracking changes for possible revert.
 
         Args:
-            path (str): The file to edit.
-            pattern (str): A regex pattern to match.
-            new_content (str, optional): The text to use in "replace", "before", or "after". Defaults to "".
-            mode (str, optional): One of:
-                - "remove": delete matched text
-                - "replace": replace matched text with new_content
-                - "before": insert new_content before each match
-                - "after": insert new_content after each match
-              Defaults to "replace".
+            path (str): The file to modify
+            start_line (int): First line to update (1-based)
+            end_line (int): Last line to update (1-based, inclusive)
+            new_content (str): The new content to insert
 
         Returns:
-            str: Success message, including how many matches were changed.
-
-        Examples:
-            >>> pattern_edit("config.ini", r"(?i)username\s*=\s*\S+", "username = new_user")
-            # Replaces any line with "username = something" (case-insensitive)
+            str: JSON-formatted result with before/after content
         """
         try:
-            valid_modes = ["remove", "replace", "before", "after"]
-            if mode not in valid_modes:
-                return f"Invalid mode: '{mode}'. Must be one of {valid_modes}."
+            file_state = self._get_file_state(path)
 
+            change = Change(
+                file_path=path,
+                change_type=ChangeType.UPDATE,
+                start_line=start_line,
+                end_line=end_line,
+                new_content=new_content,
+            )
+
+            file_state.add_change(change)
+            file_state.apply_pending_changes()
+            file_state.save()
+
+            result = {
+                "action": "update",
+                "start_line": start_line,
+                "end_line": end_line,
+                "original_content": change.previous_content,
+                "new_content": new_content,
+            }
+
+            return json.dumps(result, indent=2)
+
+        except Exception as e:
+            return f"Error updating range: {str(e)}"
+
+    @kernel_function(description="Insert code at a specific point in a file.")
+    def insert_code(self, path: str, line_number: int, content: str) -> str:
+        """
+        Inserts code at a specific line number, handling spacing and tracking changes.
+
+        Args:
+            path (str): The file to modify
+            line_number (int): Line number to insert at (1-based)
+            content (str): The code to insert
+
+        Returns:
+            str: JSON-formatted result with inserted content
+        """
+        try:
+            file_state = self._get_file_state(path)
+
+            change = Change(
+                file_path=path,
+                change_type=ChangeType.INSERT,
+                start_line=line_number,
+                end_line=line_number,
+                new_content=content,
+            )
+
+            file_state.add_change(change)
+            file_state.apply_pending_changes()
+            file_state.save()
+
+            result = {
+                "action": "insert",
+                "line_number": line_number,
+                "inserted_content": content,
+                "num_lines_added": len(content.splitlines()),
+            }
+
+            return json.dumps(result, indent=2)
+
+        except Exception as e:
+            return f"Error inserting code: {str(e)}"
+
+    @kernel_function(description="Verify changes made to a file.")
+    def verify_changes(self, path: str) -> str:
+        """
+        Verifies changes made to a file by checking syntax and references.
+        Uses FileState to access original content for comparison.
+
+        Args:
+            path (str): The file to verify
+
+        Returns:
+            str: JSON-formatted verification results
+        """
+        try:
             file_path = self._validate_path(path)
             if not file_path.exists():
                 return f"Error: File '{path}' does not exist."
 
-            with open(file_path, "r", encoding="utf-8") as f:
-                original = f.read()
+            with open(file_path, "r") as f:
+                current_content = f.read()
 
-            matches = list(re.finditer(pattern, original, flags=re.MULTILINE))
-            if not matches:
-                return "No matches found."
+            # Basic syntax validation
+            syntax_valid = True
+            syntax_errors = []
+            try:
+                if path.endswith(".py"):
+                    compile(current_content, path, "exec")
+            except Exception as e:
+                syntax_valid = False
+                syntax_errors.append(str(e))
 
-            new_text = original
-            for m in reversed(matches):
-                start_idx, end_idx = m.span()
-                if mode == "remove":
-                    new_text = new_text[:start_idx] + new_text[end_idx:]
-                elif mode == "replace":
-                    new_text = new_text[:start_idx] + new_content + new_text[end_idx:]
-                elif mode == "before":
-                    new_text = new_text[:start_idx] + new_content + new_text[start_idx:]
-                elif mode == "after":
-                    new_text = new_text[:end_idx] + new_content + new_text[end_idx:]
+            # Generate diff from original
+            # TODO: Implement proper diff generation
 
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(new_text)
+            result = {
+                "syntax_valid": syntax_valid,
+                "syntax_errors": syntax_errors,
+                "changes": [
+                    {
+                        "type": c.change_type.value,
+                        "start_line": c.start_line,
+                        "end_line": c.end_line,
+                        "content_before": c.previous_content,
+                        "content_after": c.new_content,
+                    }
+                    for c in self._get_file_state(path).applied_changes
+                ],
+                "warnings": [],
+            }
 
-            return f"Successfully edited file: {path} ({len(matches)} match(es))"
-        except re.error as re_err:
-            return f"Regex error: {str(re_err)}"
+            return json.dumps(result, indent=2)
+
         except Exception as e:
-            return f"Error in pattern_edit: {str(e)}"
+            return f"Error verifying changes: {str(e)}"
+
+    @kernel_function(description="Revert changes made to a file.")
+    def revert_changes(self, path: str, num_changes: int = 1) -> str:
+        """
+        Reverts the last N changes made to a file.
+
+        Args:
+            path (str): The file to revert changes in
+            num_changes (int): Number of changes to revert (default: 1)
+
+        Returns:
+            str: JSON-formatted revert results
+        """
+        try:
+            file_state = self._get_file_state(path)
+
+            reverted = []
+            for _ in range(num_changes):
+                if not file_state.applied_changes:
+                    break
+                change = file_state.applied_changes[-1]
+                reverted.append(
+                    {
+                        "type": change.change_type.value,
+                        "start_line": change.start_line,
+                        "end_line": change.end_line,
+                        "content": change.previous_content,
+                    }
+                )
+                file_state.revert_last_change()
+
+            file_state.save()
+
+            result = {
+                "reverted_changes": reverted,
+                "remaining_changes": len(file_state.applied_changes),
+            }
+
+            return json.dumps(result, indent=2)
+
+        except Exception as e:
+            return f"Error reverting changes: {str(e)}"
 
     @kernel_function(description="Get the plugin usage instructions.")
     def get_instructions(self) -> str:
+        """Returns the recommended workflow steps and usage details."""
+        return self.PLUGIN_INSTRUCTIONS
+
+    @kernel_function(description="Remove a symbol and all its references from a file.")
+    def remove_symbol(self, path: str, symbol: str) -> str:
         """
-        Returns a high-level usage guide for this generic code editor plugin.
+        Removes a symbol (like a variable) and all its references from a file.
+        Handles complete blocks and maintains proper spacing.
+
+        Args:
+            path (str): The file to modify
+            symbol (str): The symbol to remove
 
         Returns:
-            str: The recommended workflow steps and usage details.
+            str: JSON-formatted result with removed content
         """
-        return self.PLUGIN_INSTRUCTIONS
+        try:
+            file_state = self._get_file_state(path)
+
+            with open(path, "r") as f:
+                lines = f.readlines()
+
+            ranges = self._find_all_references(lines, symbol)
+            if not ranges:
+                return json.dumps(
+                    {"message": f"No references to '{symbol}' found in {path}"}
+                )
+
+            changes = []
+            for start, end in ranges:
+                change = Change(
+                    file_path=path,
+                    change_type=ChangeType.DELETE,
+                    start_line=start,
+                    end_line=end,
+                )
+                file_state.add_change(change)
+                changes.append(
+                    {
+                        "start_line": start,
+                        "end_line": end,
+                        "content": "\n".join(lines[start - 1 : end]),
+                    }
+                )
+
+            file_state.apply_pending_changes()
+            file_state.save()
+
+            result = {"action": "remove_symbol", "symbol": symbol, "changes": changes}
+
+            return json.dumps(result, indent=2)
+
+        except Exception as e:
+            return f"Error removing symbol: {str(e)}"

@@ -85,6 +85,8 @@ agent "local" {
   description    = "A helpful coding assistant"
   system_prompt  = <<-EOT
     You are a helpful coding assistant.
+    Be proactive in helping the user with their coding needs.
+    Be curious, searching files and looking for the right information.
     EOT
   model          = model.llama2_instance
   plugins        = [plugin.local.echo, plugin.local.code_editor]
