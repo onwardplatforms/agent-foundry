@@ -52,6 +52,27 @@ class Change:
 
 
 @dataclass
+class LineChange:
+    """Represents a change in line numbers"""
+
+    original_start: int  # 1-based
+    original_end: int  # 1-based, inclusive
+    new_start: int  # 1-based
+    new_length: int  # number of lines in new content
+
+    def affects_line(self, line_number: int) -> bool:
+        """Check if this change affects a given line number"""
+        return line_number > self.original_start
+
+    def adjust_line(self, line_number: int) -> int:
+        """Adjust a line number based on this change"""
+        if not self.affects_line(line_number):
+            return line_number
+        delta = self.new_length - (self.original_end - self.original_start + 1)
+        return line_number + delta
+
+
+@dataclass
 class FileState:
     """Maintains the state of a file through multiple changes"""
 
@@ -60,6 +81,7 @@ class FileState:
     current_content: str
     pending_changes: List[Change]
     applied_changes: List[Change]
+    line_changes: List[LineChange]  # Track all line number changes
 
     @classmethod
     def from_file(cls, file_path: str) -> "FileState":
@@ -72,16 +94,48 @@ class FileState:
             current_content=content,
             pending_changes=[],
             applied_changes=[],
+            line_changes=[],
         )
 
     def add_change(self, change: Change) -> None:
-        """Add a change to pending changes"""
-        self.pending_changes.append(change)
+        """Add a change to pending changes and adjust its line numbers"""
+        adjusted_change = self._adjust_change_lines(change)
+        self.pending_changes.append(adjusted_change)
+
+    def _adjust_change_lines(self, change: Change) -> Change:
+        """Adjust the line numbers of a change based on previous changes"""
+        start_line = change.start_line
+        end_line = change.end_line
+
+        # Apply all previous line changes in order
+        for line_change in self.line_changes:
+            start_line = line_change.adjust_line(start_line)
+            end_line = line_change.adjust_line(end_line)
+
+        return Change(
+            file_path=change.file_path,
+            change_type=change.change_type,
+            start_line=start_line,
+            end_line=end_line,
+            new_content=change.new_content,
+        )
 
     def apply_pending_changes(self) -> None:
         """Apply all pending changes in order"""
         for change in self.pending_changes:
             self._apply_change(change)
+            # Record the line number change
+            new_length = (
+                len(change.new_content.splitlines()) if change.new_content else 0
+            )
+            self.line_changes.append(
+                LineChange(
+                    original_start=change.start_line,
+                    original_end=change.end_line,
+                    new_start=change.start_line,
+                    new_length=new_length,
+                )
+            )
         self.applied_changes.extend(self.pending_changes)
         self.pending_changes.clear()
 
@@ -147,27 +201,55 @@ class CodeEditorPlugin:
     """
 
     PLUGIN_INSTRUCTIONS = r"""
-    Recommended Code Editing Workflow
-    =================================
+    Code Editor Plugin - Usage Guide
+    ==============================
 
-    1) Inspect the Project
-    - Use `list_dir()` or `tree_list()` to see how files and folders are organized.
-    - Use `search()` to locate references to important terms or functions.
+    WORKFLOW FOR CODE CHANGES:
+    1. READ FIRST: Always read and understand the entire file before making changes
+       - Read the complete content of files you plan to modify
+       - Understand the structure and dependencies
+       - Consider the broader context of the codebase
 
-    2) Analyze and Plan
-    - Use `analyze_changes()` to determine what needs to be changed
-    - Read files with `read_file()` to understand context
-    - Plan changes in the correct order to handle line number shifts
+    2. PLAN CHANGES:
+       - Identify ALL issues that need fixing
+       - Consider how changes might affect other parts of the code
+       - Think about proper code organization
+       - Plan your changes before executing them
 
-    3) Make Changes
-    - Use `delete_range()` to remove code blocks
-    - Use `update_range()` to modify existing code
-    - Use `insert_code()` to add new code
+    3. EXECUTE CHANGES:
+       - For small, isolated changes: use targeted updates
+       - For significant restructuring: rewrite the entire file
+       - Make complete, coherent changes - not partial fixes
+       - Ensure changes maintain code quality
 
-    4) Verify Changes
-    - Use `verify_changes()` to check syntax and references
-    - Re-read files to confirm changes
-    - Run tests or linting as needed
+    4. VERIFY CHANGES:
+       - Read the updated file to verify changes
+       - Check for syntax errors or structural issues
+       - Ensure the code is clean and properly formatted
+       - Verify that all issues were addressed
+
+    5. COMMUNICATE CLEARLY:
+       - Explain what you changed and why
+       - If you're unsure about something, say so
+       - If you need more information, ask for it
+
+    Remember: Think like a human programmer. Don't rush to make changes without understanding the full context.
+
+    Common Operations:
+    1. Exploring Code:
+       - List directory contents
+       - Search for specific code elements
+       - Find text across files
+
+    2. Making Changes:
+       - Read and update files
+       - Insert or delete code
+       - Modify specific ranges
+
+    3. Managing Changes:
+       - Verify changes before saving
+       - Revert changes if needed
+       - Execute shell commands when necessary
     """
 
     def __init__(self, workspace: Optional[str] = None):
@@ -505,15 +587,16 @@ class CodeEditorPlugin:
         return max(1, original_line - adjustment)
 
     def _find_block_boundaries(
-        self, lines: List[str], start_line: int
+        self, lines: List[str], start_line: int, language: Optional[str] = None
     ) -> tuple[int, int]:
         """
         Find the complete boundaries of a block starting from a given line.
-        Handles nested blocks and proper brace matching.
+        Handles nested blocks and proper brace/indentation matching.
 
         Args:
             lines (List[str]): All lines of the file
             start_line (int): 1-based line number where we found a match
+            language (str, optional): Language hint for better block detection
 
         Returns:
             tuple[int, int]: Start and end line numbers (1-based, inclusive)
@@ -521,30 +604,55 @@ class CodeEditorPlugin:
         # Convert to 0-based index
         idx = start_line - 1
 
-        # Look backwards for the block start
-        while idx > 0:
-            line = lines[idx].strip()
-            if line.endswith("{"):
-                # Found potential block start, verify it's a complete declaration
-                prev_line = lines[idx - 1].strip()
-                if prev_line.startswith("variable") or prev_line.startswith("model"):
-                    idx -= 1  # Include the declaration line
-                break
-            idx -= 1
+        # Detect indentation or block style
+        if language == "python":
+            # Python uses indentation
+            base_line = lines[idx].rstrip()
+            base_indent = len(base_line) - len(base_line.lstrip())
 
-        block_start = idx
+            # Look backwards for the block start (less indented line)
+            while idx > 0:
+                line = lines[idx - 1].rstrip()
+                if line and len(line) - len(line.lstrip()) < base_indent:
+                    break
+                idx -= 1
 
-        # Look forward for the block end
-        brace_count = 0
-        idx = block_start
-        while idx < len(lines):
-            line = lines[idx].strip()
-            brace_count += line.count("{") - line.count("}")
-            if brace_count == 0 and line == "}":
-                break
-            idx += 1
+            block_start = idx
 
-        block_end = idx
+            # Look forward for the block end (less indented line)
+            idx = start_line
+            while idx < len(lines):
+                line = lines[idx].rstrip()
+                if line and len(line) - len(line.lstrip()) < base_indent:
+                    break
+                idx += 1
+
+            block_end = idx
+        else:
+            # Default to brace matching for other languages
+            # Look backwards for the block start
+            brace_count = 0
+            while idx > 0:
+                line = lines[idx].strip()
+                brace_count += line.count("}") - line.count("{")
+                if brace_count > 0 and "{" in line:
+                    # Found the start
+                    break
+                idx -= 1
+
+            block_start = idx
+
+            # Look forward for the block end
+            brace_count = 0
+            idx = block_start
+            while idx < len(lines):
+                line = lines[idx].strip()
+                brace_count += line.count("{") - line.count("}")
+                if brace_count == 0 and "}" in line:
+                    break
+                idx += 1
+
+            block_end = idx
 
         # Convert back to 1-based line numbers
         return (block_start + 1, block_end + 1)
@@ -578,6 +686,130 @@ class CodeEditorPlugin:
 
         # Sort in reverse order so we can remove from bottom to top
         return sorted(ranges, reverse=True)
+
+    def _detect_language(self, file_path: str) -> str:
+        """
+        Detect the programming language based on file extension and content patterns.
+        """
+        ext = Path(file_path).suffix.lower()
+        language_map = {
+            ".py": "python",
+            ".js": "javascript",
+            ".ts": "typescript",
+            ".java": "java",
+            ".cpp": "cpp",
+            ".c": "c",
+            ".go": "go",
+            ".rs": "rust",
+            ".rb": "ruby",
+            ".php": "php",
+            ".hcl": "hcl",
+            ".tf": "hcl",
+        }
+        return language_map.get(ext, "unknown")
+
+    def _get_language_patterns(self, language: str) -> Dict[str, str]:
+        """
+        Get regex patterns for different code elements based on language.
+        """
+        patterns = {
+            "python": {
+                "function": r"(?:async\s+)?def\s+([a-zA-Z_]\w*)\s*\([^)]*\)\s*(?:->.*?)?:",
+                "class": r"class\s+([a-zA-Z_]\w*)\s*(?:\([^)]*\))?\s*:",
+                "variable": r"([a-zA-Z_]\w*)\s*=\s*[^=]",
+                "import": r"(?:from\s+[\w.]+\s+)?import\s+(?:[^#\n]+)",
+                "decorator": r"@[\w.]+",
+            },
+            "javascript": {
+                "function": r"(?:async\s+)?(?:function\s+([a-zA-Z_]\w*)|(?:const|let|var)\s+([a-zA-Z_]\w*)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>)",
+                "class": r"class\s+([a-zA-Z_]\w*)",
+                "variable": r"(?:const|let|var)\s+([a-zA-Z_]\w*)\s*=",
+                "import": r"import\s+(?:[^;]+)",
+                "export": r"export\s+(?:default\s+)?(?:class|function|const|let|var)",
+            },
+            "hcl": {
+                "block": r'(\w+)\s+"[^"]+"\s*{',
+                "variable": r'variable\s+"([^"]+)"\s*{',
+                "attribute": r"([a-zA-Z_]\w*)\s*=\s*(?:[^=])",
+                "reference": r"var\.([a-zA-Z_]\w*)",
+            },
+            # Add more languages as needed
+        }
+        return patterns.get(language, {})
+
+    @kernel_function(description="Find code elements using pattern matching.")
+    def find_code_elements(self, path: str, element_type: Optional[str] = None) -> str:
+        """
+        Find code elements (functions, classes, variables, etc.) using language-aware pattern matching.
+
+        Args:
+            path (str): Path to the file to analyze
+            element_type (str, optional): Specific type of element to find (e.g., 'function', 'class', 'variable')
+                                        If None, finds all supported element types.
+
+        Returns:
+            str: JSON-formatted results of found elements
+        """
+        try:
+            file_path = self._validate_path(path)
+            if not file_path.exists():
+                return f"Error: File '{path}' does not exist."
+
+            with open(file_path, "r") as f:
+                content = f.read()
+
+            language = self._detect_language(str(file_path))
+            patterns = self._get_language_patterns(language)
+
+            if not patterns:
+                return json.dumps(
+                    {
+                        "error": f"Language detection failed or unsupported language for {path}"
+                    }
+                )
+
+            results = {}
+            if element_type:
+                if element_type not in patterns:
+                    return json.dumps(
+                        {
+                            "error": f"Element type '{element_type}' not supported for {language}"
+                        }
+                    )
+                pattern_dict = {element_type: patterns[element_type]}
+            else:
+                pattern_dict = patterns
+
+            for elem_type, pattern in pattern_dict.items():
+                matches = []
+                for match in re.finditer(pattern, content, re.MULTILINE):
+                    # Get the line number for this match
+                    line_no = content.count("\n", 0, match.start()) + 1
+
+                    # Get some context around the match
+                    lines = content.split("\n")
+                    context_start = max(0, line_no - 2)
+                    context_end = min(len(lines), line_no + 2)
+                    context = "\n".join(lines[context_start:context_end])
+
+                    # Get the actual matched groups, filtering out None values
+                    matched_names = [g for g in match.groups() if g is not None]
+
+                    matches.append(
+                        {
+                            "name": (
+                                matched_names[0] if matched_names else match.group(0)
+                            ),
+                            "line": line_no,
+                            "context": context,
+                        }
+                    )
+                results[elem_type] = matches
+
+            return json.dumps(results, indent=2)
+
+        except Exception as e:
+            return f"Error finding code elements: {str(e)}"
 
     # -------------------------------------------------------------------------
     # Public Plugin Methods

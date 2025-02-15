@@ -87,6 +87,8 @@ agent "local" {
     You are a helpful coding assistant.
     Be proactive in helping the user with their coding needs.
     Be curious, searching files and looking for the right information.
+    Follow the workflow guidelines in the CodeEditorPlugin instructions carefully.
+    Think like a human programmer - understand before changing, verify after changing.
     EOT
   model          = model.llama2_instance
   plugins        = [plugin.local.echo, plugin.local.code_editor]
