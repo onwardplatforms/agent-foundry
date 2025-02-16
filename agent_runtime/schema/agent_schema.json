@@ -1,0 +1,157 @@
+{
+    "format_version": "0.1",
+    "agent_runtime_version": "0.0.1",
+    "schemas": {
+        "runtime": {
+            "version": 1,
+            "block": {
+                "attributes": {
+                    "required_version": {
+                        "type": "string",
+                        "required": false,
+                        "description": "Required version of Agent Runtime",
+                        "pattern": "^\\d+\\.\\d+\\.\\d+$"
+                    }
+                }
+            }
+        },
+        "variable": {
+            "version": 1,
+            "block": {
+                "attributes": {
+                    "type": {
+                        "type": "string",
+                        "required": false,
+                        "description": "Type constraint for the variable",
+                        "options": [
+                            "string",
+                            "number",
+                            "bool",
+                            "list",
+                            "map",
+                            "any"
+                        ]
+                    },
+                    "description": {
+                        "type": "string",
+                        "required": false,
+                        "description": "Description of the variable's purpose"
+                    },
+                    "default": {
+                        "type": "any",
+                        "required": false,
+                        "description": "Default value if not set"
+                    },
+                    "sensitive": {
+                        "type": "bool",
+                        "required": false,
+                        "description": "Whether this variable contains sensitive data"
+                    }
+                }
+            }
+        },
+        "model": {
+            "version": 1,
+            "block": {
+                "attributes": {
+                    "provider": {
+                        "type": "string",
+                        "required": true,
+                        "description": "The AI model provider to use",
+                        "options": [
+                            "openai",
+                            "ollama"
+                        ]
+                    },
+                    "name": {
+                        "type": "string",
+                        "required": true,
+                        "description": "Name/ID of the model to use (e.g. gpt-4, gpt-3.5-turbo)"
+                    }
+                },
+                "block_types": {
+                    "settings": {
+                        "nesting_mode": "single",
+                        "block": {
+                            "attributes": {
+                                "temperature": {
+                                    "type": "number",
+                                    "required": false,
+                                    "description": "Temperature for model sampling",
+                                    "constraints": {
+                                        "min": 0,
+                                        "max": 1
+                                    }
+                                },
+                                "max_tokens": {
+                                    "type": "number",
+                                    "required": false,
+                                    "description": "Maximum tokens to generate",
+                                    "constraints": {
+                                        "min": 1
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "plugin": {
+            "version": 1,
+            "block": {
+                "attributes": {
+                    "source": {
+                        "type": "string",
+                        "required": true,
+                        "description": "Source path or URL",
+                        "pattern": "^(\\.\\/.*|\\.\\.\\/.*|https://github\\.com/[\\w-]+/[\\w-]+|[\\w-]+/[\\w-]+)$"
+                    },
+                    "version": {
+                        "type": "string",
+                        "required": false,
+                        "description": "Version (required for remote plugins)",
+                        "pattern": "^v?\\d+\\.\\d+\\.\\d+(-[\\w.]+)?$"
+                    },
+                    "variables": {
+                        "type": "map",
+                        "required": false,
+                        "description": "Variables to pass to the plugin"
+                    }
+                }
+            }
+        },
+        "agent": {
+            "version": 1,
+            "block": {
+                "attributes": {
+                    "name": {
+                        "type": "string",
+                        "required": true,
+                        "description": "Name of the agent"
+                    },
+                    "description": {
+                        "type": "string",
+                        "required": true,
+                        "description": "Description of what the agent does"
+                    },
+                    "system_prompt": {
+                        "type": "string",
+                        "required": true,
+                        "description": "System prompt that defines the agent's behavior"
+                    },
+                    "model": {
+                        "type": "string",
+                        "required": true,
+                        "description": "Model reference (e.g. ${model.name}) or inline definition"
+                    },
+                    "plugins": {
+                        "type": "list",
+                        "required": false,
+                        "description": "List of plugin references (e.g. ${plugin.type.name}) or inline definitions"
+                    }
+                }
+            }
+        }
+    }
+}

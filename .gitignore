@@ -37,6 +37,8 @@ env/
 
 # Agent Foundry specific
 .agents/
+.grounding/
+.semantickernel/
 
 # Coverage
 .coverage
@@ -51,3 +53,5 @@ coverage.xml
 
 # Logs
 *.log
+# Project specific
+.plugins/

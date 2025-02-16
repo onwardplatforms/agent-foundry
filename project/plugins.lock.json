@@ -1,0 +1,26 @@
+{
+  "plugins": [
+    {
+      "name": "echo",
+      "scoped_name": "@local/echo",
+      "source": "./local_plugins/echo",
+      "type": "local",
+      "sha": "37bb8b6f421abb31210c2d9d0a6c6005ef0f9654caa954b7193192b9edf8b83e"
+    },
+    {
+      "name": "code_editor",
+      "scoped_name": "@local/code_editor",
+      "source": "./local_plugins/code_editor",
+      "type": "local",
+      "sha": "8c11d8fa2943cce4b143ae30e94859899df53e9c790061a7d69aaee4b2252484"
+    },
+    {
+      "name": "echo",
+      "scoped_name": "@onwardplatforms/echo",
+      "source": "onwardplatforms/echo",
+      "type": "remote",
+      "version": "0.0.1",
+      "commit_sha": "a9d0f45323eb3acc8aa05552e8e724362257bfda"
+    }
+  ]
+}
