@@ -654,6 +654,142 @@ class TestProcessManagement:
         assert "test_value" in result
 
 
+class TestLintingAndFormatting:
+    """Test linting and formatting functionality."""
+
+    def test_lint_python(self, plugin: CodeEditorV2Plugin, temp_workspace: Path):
+        """Test Python linting."""
+        # Create a Python file with linting issues
+        python_file = temp_workspace / "test.py"
+        python_file.write_text(
+            """
+def bad_function( ):
+    x=1+2
+    y= x*3
+    return  y
+""".strip()
+        )
+
+        # Test linting without fixes
+        result = plugin.lint_code(str(python_file.relative_to(plugin.workspace_root)))
+        assert "issues found" in result.lower()
+        assert "whitespace" in result.lower() or "spacing" in result.lower()
+
+        # Test linting with fixes
+        result = plugin.lint_code(
+            str(python_file.relative_to(plugin.workspace_root)), fix=True
+        )
+        assert "fixed" in result.lower()
+
+        # Verify fixes were applied
+        content = python_file.read_text()
+        assert "def bad_function():" in content  # Extra space removed
+        assert "x = 1 + 2" in content  # Spaces added around operators
+
+    def test_lint_javascript(self, plugin: CodeEditorV2Plugin, temp_workspace: Path):
+        """Test JavaScript linting."""
+        # Create a JavaScript file with linting issues
+        js_file = temp_workspace / "test.js"
+        js_file.write_text(
+            """
+function badFunction( ){
+    var x=1+2;
+    var y= x*3;
+    return  y;
+}
+""".strip()
+        )
+
+        # Test linting without fixes
+        result = plugin.lint_code(str(js_file.relative_to(plugin.workspace_root)))
+        assert "issues found" in result.lower()
+
+        # Test linting with fixes
+        result = plugin.lint_code(
+            str(js_file.relative_to(plugin.workspace_root)), fix=True
+        )
+        assert "fixed" in result.lower()
+
+    def test_format_python(self, plugin: CodeEditorV2Plugin, temp_workspace: Path):
+        """Test Python formatting."""
+        # Create a Python file with formatting issues
+        python_file = temp_workspace / "test.py"
+        python_file.write_text(
+            """
+def poorly_formatted_function():
+    x=[1,2,
+    3,4]
+    if True:
+     return x
+""".strip()
+        )
+
+        # Test formatting
+        result = plugin.format_code(str(python_file.relative_to(plugin.workspace_root)))
+        assert "formatted" in result.lower()
+
+        # Verify formatting was applied
+        content = python_file.read_text()
+        assert "x = [1, 2, 3, 4]" in content  # List formatting fixed
+        assert "    return x" in content  # Indentation fixed
+
+    def test_format_javascript(self, plugin: CodeEditorV2Plugin, temp_workspace: Path):
+        """Test JavaScript formatting."""
+        # Create a JavaScript file with formatting issues
+        js_file = temp_workspace / "test.js"
+        js_file.write_text(
+            """
+function poorlyFormattedFunction(){
+    const x=[1,2,
+    3,4];
+    if(true){
+     return x;
+    }
+}
+""".strip()
+        )
+
+        # Test formatting
+        result = plugin.format_code(str(js_file.relative_to(plugin.workspace_root)))
+        assert "formatted" in result.lower()
+
+    def test_lint_invalid_file(self, plugin: CodeEditorV2Plugin):
+        """Test linting a non-existent file."""
+        result = plugin.lint_code("nonexistent.py")
+        assert "error" in result.lower()
+        assert "not found" in result.lower()
+
+    def test_format_invalid_file(self, plugin: CodeEditorV2Plugin):
+        """Test formatting a non-existent file."""
+        result = plugin.format_code("nonexistent.py")
+        assert "error" in result.lower()
+        assert "not found" in result.lower()
+
+    def test_lint_unsupported_extension(
+        self, plugin: CodeEditorV2Plugin, temp_workspace: Path
+    ):
+        """Test linting a file with unsupported extension."""
+        # Create a file with unsupported extension
+        test_file = temp_workspace / "test.xyz"
+        test_file.write_text("test content")
+
+        result = plugin.lint_code(str(test_file.relative_to(plugin.workspace_root)))
+        assert "unsupported" in result.lower()
+        assert "extension" in result.lower()
+
+    def test_format_unsupported_extension(
+        self, plugin: CodeEditorV2Plugin, temp_workspace: Path
+    ):
+        """Test formatting a file with unsupported extension."""
+        # Create a file with unsupported extension
+        test_file = temp_workspace / "test.xyz"
+        test_file.write_text("test content")
+
+        result = plugin.format_code(str(test_file.relative_to(plugin.workspace_root)))
+        assert "unsupported" in result.lower()
+        assert "extension" in result.lower()
+
+
 class TestSearchAndDiscovery:
     """Test search and discovery functionality."""
 

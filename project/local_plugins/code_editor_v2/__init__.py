@@ -484,6 +484,7 @@ class CodeEditorV2Plugin:
        - Review the changes before applying
        - Run linting to check for issues (use lint_code)
        - Fix any linting issues before proceeding
+       - Format code for consistency (use format_code)
        - Check for syntax errors or structural issues
        - Verify all issues were addressed
 
@@ -495,9 +496,16 @@ class CodeEditorV2Plugin:
 
     LINTING AND FORMATTING:
     - Use lint_code to check for code style and potential issues
-    - Supports multiple languages (Python, JavaScript, TypeScript, Go, JSON, YAML)
-    - Can automatically fix some issues with the fix=True parameter
-    - Always run linting after making code changes to ensure code quality
+    - Use format_code to format files according to language standards
+    - Supports multiple languages:
+      * Python (black)
+      * JavaScript/TypeScript (prettier)
+      * Go (gofmt)
+      * Terraform (terraform fmt)
+      * JSON/YAML (prettier)
+    - lint_code can automatically fix some issues with fix=True
+    - format_code applies standard formatting without linting
+    - Always run linting after making code changes
     - Address linting issues before applying changes
 
     Remember: Think like a human programmer. Don't rush to make changes without understanding the full context.
@@ -2013,3 +2021,61 @@ class CodeEditorV2Plugin:
         except Exception as e:
             logger.error(f"Error linting file {path}: {str(e)}")
             return f"Error linting file: {str(e)}"
+
+    @kernel_function(
+        description="Format code in a file using language-appropriate formatters."
+    )
+    def format_code(
+        self,
+        path: str,
+    ) -> str:
+        """
+        Format code in a file using language-appropriate formatters.
+
+        Args:
+            path: Path to the file to format
+
+        Returns:
+            str: Status message indicating formatting results
+        """
+        file_path = self._validate_path(path)
+        if not file_path.exists():
+            return f"Error: File not found: {file_path}"
+
+        # Map of extensions to formatting commands
+        format_commands = {
+            ".py": ["black", str(file_path)],
+            ".js": ["prettier", "--write", str(file_path)],
+            ".ts": ["prettier", "--write", str(file_path)],
+            ".go": ["gofmt", "-w", str(file_path)],
+            ".tf": ["terraform", "fmt", str(file_path)],
+            ".tfvars": ["terraform", "fmt", str(file_path)],
+            ".json": ["prettier", "--write", str(file_path)],
+            ".yaml": ["prettier", "--write", str(file_path)],
+            ".yml": ["prettier", "--write", str(file_path)],
+        }
+
+        # Get the file extension
+        ext = file_path.suffix.lower()
+        if ext not in format_commands:
+            return f"Error: Unsupported file type: {ext}"
+
+        # Run the formatter
+        try:
+            cmd = format_commands[ext]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            if result.returncode == 0:
+                return f"Successfully formatted {file_path}"
+            else:
+                error_msg = result.stderr.strip() or result.stdout.strip()
+                return f"Error formatting {file_path}: {error_msg}"
+        except FileNotFoundError:
+            return f"Error: Required formatter not found for {ext} files"
+        except Exception as e:
+            return f"Error formatting {file_path}: {str(e)}"

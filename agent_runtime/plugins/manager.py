@@ -744,8 +744,14 @@ class PluginManager:
                                     f"version {change['old']} → {change['new']}"
                                 )
                             elif change["type"] == "commit":
+                                old_commit = (
+                                    change["old"][:7] if change["old"] else "none"
+                                )
+                                new_commit = (
+                                    change["new"][:7] if change["new"] else "none"
+                                )
                                 changes_desc.append(
-                                    f"commit {change['old'][:7]} → {change['new'][:7]}"
+                                    f"commit {old_commit} → {new_commit}"
                                 )
                         click.echo(
                             Style.plugin_status(

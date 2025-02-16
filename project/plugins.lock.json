@@ -12,7 +12,7 @@
       "scoped_name": "@local/code_editor",
       "source": "./local_plugins/code_editor_v2",
       "type": "local",
-      "sha": "44d5f9f5d2110ba8035cd4afa3640721a7a7a4c5f044951cd85deb7f149f63c2"
+      "sha": "ab882427639538407d464b1400a6af6d2dff328a22dd00960488b1fe8931347c"
     },
     {
       "name": "echo",
@@ -20,7 +20,7 @@
       "source": "onwardplatforms/echo",
       "type": "remote",
       "version": "0.0.1",
-      "commit_sha": null
+      "commit_sha": "a9d0f45323eb3acc8aa05552e8e724362257bfda"
     }
   ]
 }
