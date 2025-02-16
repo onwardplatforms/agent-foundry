@@ -464,52 +464,73 @@ class CodeEditorV2Plugin:
     """
 
     PLUGIN_INSTRUCTIONS = """
-    WORKFLOW FOR CODE CHANGES:
-    1. READ FIRST: Always read and understand the code before making changes
-       - Use search_code to find relevant code
-       - Read the complete content of files you plan to modify
-       - Understand the structure and dependencies
+    HOW I WORK:
+    I am a proactive coding assistant that handles code changes with careful consideration of dependencies and side effects.
+    My primary focus is on making reliable, verified changes across multiple files when needed.
 
-    2. PLAN CHANGES:
-       - Identify the exact snippets to modify
-       - Consider how changes might affect other parts of the code
-       - Plan your changes before executing them
+    1. SEARCH FIRST, CHANGE LATER
+       Before making ANY changes:
+       - ALWAYS use search_across_files() first to find ALL related code
+       - ALWAYS use find_references() to catch ALL dependencies
+       - Document everything I find before proceeding
+       - If a change affects multiple files, list ALL files that need updating
 
-    3. EXECUTE CHANGES:
-       - Use update_code/delete_code/add_code with exact snippets
-       - Make complete, coherent changes - not partial fixes
-       - Verify changes match your intentions
+    2. PLAN COMPLETELY
+       For each set of related changes:
+       - List ALL files that need to be modified
+       - Explain ALL changes that will be made
+       - Show how the changes are connected
+       - Get confirmation before proceeding
+       - Never make partial changes - either update everything or nothing
 
-    4. VERIFY CHANGES:
-       - Review the changes before applying
-       - Run linting to check for issues (use lint_code)
-       - Fix any linting issues before proceeding
-       - Format code for consistency (use format_code)
-       - Check for syntax errors or structural issues
-       - Verify all issues were addressed
+    3. EXECUTE CAREFULLY
+       When making changes:
+       - Make changes in a logical order (dependencies first)
+       - Use update_code() with exact matching to ensure precision
+       - Verify each change immediately after making it
+       - If a change fails, stop and explain why
+       - Never leave files in an inconsistent state
 
-    5. COMMUNICATE CLEARLY:
-       - Explain what you changed and why
-       - If you're unsure about something, say so
-       - If you need more information, ask for it
-       - Prefer detailed summaries rather than full code blocks in output
+    4. VERIFY THOROUGHLY
+       After changes are made:
+       - verify_changes() to check pending changes
+       - Check that ALL related files are consistent
+       - Confirm that ALL references are updated
+       - Run any necessary validation
+       - Only apply_changes() when everything is verified
 
-    LINTING AND FORMATTING:
-    - Use lint_code to check for code style and potential issues
-    - Use format_code to format files according to language standards
-    - Supports multiple languages:
-      * Python (black)
-      * JavaScript/TypeScript (prettier)
-      * Go (gofmt)
-      * Terraform (terraform fmt)
-      * JSON/YAML (prettier)
-    - lint_code can automatically fix some issues with fix=True
-    - format_code applies standard formatting without linting
-    - Always run linting after making code changes
-    - Address linting issues before applying changes
+    CRITICAL FUNCTIONS:
+    Multi-File Operations:
+    - search_across_files(query) -> ALWAYS use this first to find ALL instances
+    - find_references(symbol) -> ALWAYS use this to check dependencies
 
-    Remember: Think like a human programmer. Don't rush to make changes without understanding the full context.
+    Safe Code Changes:
+    - update_code(path, target, new_content) -> Use exact matching
+    - verify_changes() -> ALWAYS verify before applying
+    - apply_changes() -> Only after verification
+    - revert_changes() -> If anything goes wrong
+
+    Support Functions:
+    - read_file() -> For examining code
+    - list_dir() -> For understanding structure
+    - format_code() -> After changes
+    - lint_code() -> For validation
+
+    RULES:
+    1. ALWAYS search before changing
+    2. ALWAYS find all references
+    3. ALWAYS verify before applying
+    4. NEVER make partial updates
+    5. NEVER skip verification
+    6. STOP if verification fails
+
+    I handle these file types: Python, JavaScript/TypeScript, Go, Terraform, JSON/YAML.
+    I prioritize correctness over speed and will always explain my actions.
     """
+
+    def get_instructions(self) -> str:
+        """Return the plugin instructions for the agent runtime."""
+        return self.PLUGIN_INSTRUCTIONS
 
     def __init__(self, workspace_root: Optional[Path] = None):
         """
@@ -616,12 +637,20 @@ class CodeEditorV2Plugin:
         Raises:
             ValueError: If path is invalid or outside workspace root
         """
-        # Let ValueError propagate from _validate_path
-        file_path = self._validate_path(path)
-        if not file_path.is_file():
-            return f"Error: File '{path}' does not exist or is not a regular file."
-
         try:
+            logger.debug(f"Reading file: {path}")
+            logger.debug(f"Start line: {start_line}")
+            logger.debug(f"End line: {end_line}")
+
+            print_action(
+                f"Reading file {path} from lines {start_line} to {end_line}..."
+            )
+
+            # Let ValueError propagate from _validate_path
+            file_path = self._validate_path(path)
+            if not file_path.is_file():
+                return f"Error: File '{path}' does not exist or is not a regular file."
+
             with open(file_path, "r", encoding="utf-8") as f:
                 if start_line is None and end_line is None:
                     return f.read()
@@ -634,6 +663,7 @@ class CodeEditorV2Plugin:
         except UnicodeDecodeError:
             raise  # Let UnicodeDecodeError propagate for binary files
         except Exception as e:
+            logger.error(f"Error reading file {path}: {str(e)}")
             return f"Error reading file: {str(e)}"
 
     @kernel_function(description="Write content to a file (overwriting).")
@@ -995,6 +1025,11 @@ class CodeEditorV2Plugin:
             str: Result of the operation
         """
         try:
+            logger.debug(f"Updating code in {path}")
+            logger.debug(f"Target snippet: {target_snippet}")
+            logger.debug(f"New content: {new_content}")
+            logger.debug(f"Match type: {match_type}")
+
             print_action(f"Updating code in {path}")
 
             # Stage the file in our Git repo
@@ -1112,13 +1147,17 @@ class CodeEditorV2Plugin:
                 f"match_type={match_result.match_type})"
             )
 
-            return (
-                f"Successfully queued update:\n"
-                f"- File: {path}\n"
-                f"- Lines: {match_result.start_line}-{match_result.end_line}\n"
-                f"- Match type: {match_result.match_type}\n"
-                f"Use verify_changes() to review and apply_changes() to apply"
-            )
+            # Automatically apply changes
+            result = self.apply_changes()
+            if "Successfully applied changes" in result:
+                return (
+                    f"Successfully updated code:\n"
+                    f"- File: {path}\n"
+                    f"- Lines: {match_result.start_line}-{match_result.end_line}\n"
+                    f"- Match type: {match_result.match_type}"
+                )
+            else:
+                return f"Error applying changes: {result}"
 
         except Exception as e:
             logger.error(f"Error updating code in {path}: {str(e)}")
@@ -1145,6 +1184,10 @@ class CodeEditorV2Plugin:
             str: Success message or error
         """
         try:
+            logger.debug(f"Preparing to delete code from {path}")
+            logger.debug(f"Target snippet: {target_snippet}")
+            logger.debug(f"Match type: {match_type}")
+
             print_action(f"Preparing to delete code from {path}")
 
             # Validate and read the file
@@ -1209,13 +1252,17 @@ class CodeEditorV2Plugin:
                 f"match_type={match_result.match_type})"
             )
 
-            return (
-                f"Successfully queued deletion:\n"
-                f"- File: {path}\n"
-                f"- Lines: {match_result.start_line}-{match_result.end_line}\n"
-                f"- Match type: {match_result.match_type}\n"
-                f"Use verify_changes() to review and apply_changes() to apply"
-            )
+            # Automatically apply changes
+            result = self.apply_changes()
+            if "Successfully applied changes" in result:
+                return (
+                    f"Successfully deleted code:\n"
+                    f"- File: {path}\n"
+                    f"- Lines: {match_result.start_line}-{match_result.end_line}\n"
+                    f"- Match type: {match_result.match_type}"
+                )
+            else:
+                return f"Error applying changes: {result}"
 
         except Exception as e:
             logger.error(f"Error deleting code from {path}: {str(e)}")
@@ -1226,8 +1273,8 @@ class CodeEditorV2Plugin:
         self,
         path: str,
         new_content: str,
-        position: Literal["before", "after"],
         target_snippet: str,
+        position: Literal["before", "after"] = "after",
         match_type: Literal["exact", "fuzzy"] = "exact",
         context_lines: int = 2,
     ) -> str:
@@ -1237,8 +1284,8 @@ class CodeEditorV2Plugin:
         Args:
             path (str): Path to the file to modify
             new_content (str): The new code to insert
-            position (str): Position to insert the code ('before' or 'after')
             target_snippet (str): The code snippet to find for insertion
+            position (str): Position to insert the code ('before' or 'after', defaults to 'after')
             match_type (str): Whether to use 'exact' or 'fuzzy' matching
             context_lines (int): Number of context lines to use for matching
 
@@ -1246,7 +1293,13 @@ class CodeEditorV2Plugin:
             str: Success message or error
         """
         try:
-            print_action(f"Preparing to insert code into {path}")
+            logger.debug(f"Inserting code in {path}")
+            logger.debug(f"Target snippet: {target_snippet}")
+            logger.debug(f"New content: {new_content}")
+            logger.debug(f"Position: {position}")
+            logger.debug(f"Match type: {match_type}")
+
+            print_action(f"Inserting code in {path}")
 
             # Validate and read the file
             file_path = self._validate_path(path)
@@ -1348,6 +1401,10 @@ class CodeEditorV2Plugin:
             str: Result of the search
         """
         try:
+            logger.debug(f"Searching for code snippets in {path}")
+            logger.debug(f"Query: {query}")
+            logger.debug(f"Match type: {match_type}")
+
             print_action(f"Searching for code snippets in {path}")
 
             # Validate and read the file
@@ -1438,39 +1495,35 @@ class CodeEditorV2Plugin:
     @kernel_function(description="Verify changes before applying them.")
     def verify_changes(self) -> str:
         """
-        Verify changes before applying them.
+        Verify pending changes before applying them.
 
         Returns:
             str: Result of the verification
         """
         try:
+            logger.debug("Verifying changes")
             print_action("Verifying changes before applying them")
 
-            # Verify each change
-            verification_results = []
-            for file_path, changes in self._pending_changes.items():
-                for change in changes:
-                    verification_results.append(
-                        f"Verifying change in {file_path}: {change.change_type} - {change.target_snippet.content}"
-                    )
-                    match_result = self._find_snippet_match(
-                        self.read_file(file_path),
-                        change.target_snippet,
-                        fuzzy=(change.change_type == ChangeType.UPDATE),
-                        context_lines=2,
-                    )
-                    verification_results.append(
-                        f"Verification result: {match_result.matched} - {match_result.error_message}"
-                    )
+            # Get the diff of staged changes
+            result = subprocess.run(
+                ["git", "diff", "--staged"],
+                cwd=self.git_editor.temp_dir,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
 
-            if all(result.matched for result in verification_results):
-                return "All changes verified successfully"
-            else:
-                return "Some changes failed verification"
+            logger.debug(f"Git diff output: {result.stdout}")
 
+            if not result.stdout:
+                logger.debug("No changes to verify")
+                return "No changes to verify"
+
+            return f"Changes verified:\n{result.stdout}"
         except Exception as e:
-            logger.error("Error verifying changes: {str(e)}")
-            return f"Error verifying changes: {str(e)}"
+            error_msg = f"Error verifying changes: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
 
     def _matches(
         self, target: CodeSnippet, candidate: CodeSnippet, fuzzy: bool = False
@@ -1514,6 +1567,7 @@ class CodeEditorV2Plugin:
             str: Result of the application
         """
         try:
+            logger.debug("Applying changes to files")
             print_action("Applying changes to files")
 
             # Group changes by file for atomic application
@@ -1594,6 +1648,10 @@ class CodeEditorV2Plugin:
             str: Search results with file paths and line numbers
         """
         try:
+            logger.debug(f"Searching for code across files matching '{file_pattern}'")
+            logger.debug(f"Query: {query}")
+            logger.debug(f"Case sensitive: {case_sensitive}")
+
             print_action(f"Searching for code across files matching '{file_pattern}'")
 
             # Find all matching files
@@ -1624,6 +1682,7 @@ class CodeEditorV2Plugin:
             return "\n".join(matches)
 
         except Exception as e:
+            logger.error(f"Error searching files: {str(e)}")
             return f"Error searching files: {str(e)}"
 
     @kernel_function(description="Find references to a symbol across files.")
@@ -1647,6 +1706,11 @@ class CodeEditorV2Plugin:
             str: Formatted reference results
         """
         try:
+            logger.debug(f"Finding references to '{symbol}'")
+            logger.debug(f"File pattern: {file_pattern}")
+            logger.debug(f"Context lines: {context_lines}")
+            logger.debug(f"Max results: {max_results}")
+
             print_action(f"Finding references to '{symbol}'")
 
             # Build a regex pattern that matches common symbol usage patterns
@@ -1752,6 +1816,13 @@ class CodeEditorV2Plugin:
             str: Formatted command output and status
         """
         try:
+            logger.debug(f"Executing command: {command}")
+            logger.debug(f"Working directory: {cwd}")
+            logger.debug(f"Timeout: {timeout}")
+            logger.debug(f"Environment variables: {env}")
+            logger.debug(f"Shell: {shell}")
+            logger.debug(f"Stream output: {stream_output}")
+
             print_action(f"Executing command: {command}")
 
             # Validate working directory
@@ -1876,6 +1947,9 @@ class CodeEditorV2Plugin:
             str: Result of the revert operation
         """
         try:
+            logger.debug(f"Reverting changes for {path}")
+            logger.debug(f"Number of changes: {num_changes}")
+
             print_action(f"Reverting changes for {path}")
 
             # Use Git to revert changes
@@ -1899,8 +1973,10 @@ class CodeEditorV2Plugin:
             str: Git log with patches
         """
         try:
+            logger.debug(f"Getting change history for {path}")
             return self.git_editor.get_change_history(path)
         except Exception as e:
+            logger.error(f"Error getting change history: {str(e)}")
             return f"Error getting change history: {str(e)}"
 
     @kernel_function(
@@ -1922,6 +1998,9 @@ class CodeEditorV2Plugin:
             str: Linting results or error message
         """
         try:
+            logger.debug(f"Linting file: {path}")
+            logger.debug(f"Fix: {fix}")
+
             print_action(f"Linting file: {path}")
 
             # Validate and get file path
@@ -2038,6 +2117,7 @@ class CodeEditorV2Plugin:
         Returns:
             str: Status message indicating formatting results
         """
+        print_action(f"Formatting file: {path}...")
         file_path = self._validate_path(path)
         if not file_path.exists():
             return f"Error: File not found: {file_path}"

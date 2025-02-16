@@ -1,3 +1,8 @@
+model "gpt4" {
+  provider = "openai"
+  name     = "gpt-4"
+}
+
 model "gpt4o" {
   provider = "openai"
   name     = "gpt-4o"

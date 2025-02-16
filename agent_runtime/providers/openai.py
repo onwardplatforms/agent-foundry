@@ -1,4 +1,5 @@
 # agent_runtime/providers/openai.py
+import logging
 from pathlib import Path
 from typing import AsyncIterator, Optional, Dict, Any
 
@@ -11,13 +12,19 @@ from semantic_kernel.connectors.ai.function_choice_behavior import (
 )
 from semantic_kernel.contents import ChatHistory, StreamingChatMessageContent
 from semantic_kernel.kernel import Kernel
+from semantic_kernel.planners import (
+    FunctionCallingStepwisePlanner,
+    FunctionCallingStepwisePlannerOptions,
+)
 
 from agent_runtime.providers.base import OpenAISettings, Provider, ProviderConfig
 from agent_runtime.plugins.manager import PluginManager
 
+logger = logging.getLogger(__name__)
+
 
 class OpenAIProvider(Provider):
-    """OpenAI provider implementation with function-calling support."""
+    """OpenAI provider implementation with function-calling and stepwise planning support."""
 
     def __init__(self, config: ProviderConfig, base_dir: Optional[Path] = None):
         """
@@ -30,9 +37,17 @@ class OpenAIProvider(Provider):
 
         self.model = config.model or "gpt-3.5-turbo"
         self.client = OpenAIChatCompletion(ai_model_id=self.model)
-
-        # For loading plugins (function definitions), we need the same base_dir as the agent
+        self.service_id = "openai"  # Used for both chat and planning
         self.base_dir = base_dir
+
+        # Initialize stepwise planner with default options
+        self.planner_options = FunctionCallingStepwisePlannerOptions(
+            max_iterations=10,
+            max_tokens=4000,
+        )
+        self.planner = FunctionCallingStepwisePlanner(
+            service_id=self.service_id, options=self.planner_options
+        )
 
     async def chat(
         self,
@@ -80,3 +95,26 @@ class OpenAIProvider(Provider):
             else:
                 # Normal text chunk
                 yield chunk
+
+    async def plan_and_execute(
+        self,
+        goal: str,
+        kernel: Optional[Kernel] = None,
+    ) -> AsyncIterator[StreamingChatMessageContent]:
+        """
+        Execute tasks using regular chat functionality.
+        This is a simplified version that doesn't try to do complex planning.
+        """
+        if not kernel:
+            kernel = Kernel()
+
+        # Create a chat history with the goal
+        history = ChatHistory()
+        history.add_system_message(
+            "You are a helpful AI assistant. Please help accomplish the following goal:"
+        )
+        history.add_user_message(goal)
+
+        # Use regular chat to handle the request
+        async for chunk in self.chat(history, kernel):
+            yield chunk

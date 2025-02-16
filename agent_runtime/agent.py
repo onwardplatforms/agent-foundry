@@ -130,46 +130,31 @@ class Agent:
             return f"Error executing function: {str(e)}"
 
     async def chat(self, message: str) -> AsyncIterator[StreamingChatMessageContent]:
-        """
-        Process a chat message by passing the conversation history to the provider.
-        If the provider yields a chunk with a function call, run _execute_function,
-        then continue the conversation with the function's result.
-        """
-        # Add the user's message to the history
+        """Send a message to the agent and get a streaming response."""
+        if not self.provider:
+            raise RuntimeError("No provider configured for agent.")
+
+        if not self.kernel:
+            raise RuntimeError("No kernel configured for agent.")
+
+        # Add the user's message to history
         self.history.add_user_message(message)
 
-        # 1. Ask our provider to produce a streaming response (chunks).
-        async for chunk in self.provider.chat(self.history, kernel=self.kernel):
-            if chunk is None:
-                continue
-
-            # 2. If we detect a function call from the provider:
-            if hasattr(chunk, "function_call") and chunk.function_call:
-                # Execute the function
-                result = await self._execute_function(chunk.function_call)
-
-                # Add function call and result to our conversation
-                self.history.add_assistant_message(
-                    content="", function_call=chunk.function_call
-                )
-                self.history.add_function_message(
-                    name=chunk.function_call["name"], content=result
-                )
-
-                # 3. Continue the conversation with the function result appended
-                async for response_chunk in self.provider.chat(
-                    self.history, kernel=self.kernel
-                ):
-                    yield response_chunk
-
-            else:
-                # Normal text chunk
+        try:
+            # Use regular chat for all responses
+            async for chunk in self.provider.chat(self.history, self.kernel):
+                # Add non-empty responses to history
+                if chunk.content.strip():
+                    self.history.add_assistant_message(chunk.content)
                 yield chunk
 
-        # 4. Once complete, if the last chunk had text, add it to history
-        if chunk and hasattr(chunk, "content") and chunk.content:
-            self.history.add_assistant_message(chunk.content)
-            self._log_chat_history("After model response: ")
+        except Exception as e:
+            error_msg = f"Error in chat: {str(e)}"
+            logger.exception("Error in chat session")
+            self.history.add_assistant_message(error_msg)
+            yield StreamingChatMessageContent(
+                content=error_msg, role="assistant", choice_index=0
+            )
 
     @classmethod
     def from_config(
