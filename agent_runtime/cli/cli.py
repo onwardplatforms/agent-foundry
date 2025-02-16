@@ -76,9 +76,11 @@ def validate(dir: Path) -> None:
     logger.debug("Validating config in directory: %s", dir)
 
     try:
+        click.echo()  # Add newline before
         click.echo(Style.header("Validating configuration..."))
         load_and_validate_config(dir)
         click.echo(Style.success("Configuration is valid."))
+        click.echo()  # Add newline after
     except Exception as e:
         click.echo(Style.error(str(e)))
         raise SystemExit(1)
@@ -100,8 +102,9 @@ def init(dir: Path, agent: Optional[str] = None) -> None:
     """Initialize agents by installing plugins and updating the lockfile."""
     logger.debug("Initializing agents from directory: %s (agent=%s)", dir, agent)
     try:
-        click.echo(Style.header("Initializing agent configuration..."))
+        click.echo()  # Add newline before
         init_plugins(dir, agent)
+        click.echo()  # Add newline after
     except Exception as e:
         logger.exception("Failed to init plugins.")
         click.echo(Style.error(f"Failed to init plugins: {e}"))
@@ -140,8 +143,10 @@ def run(
     logger.debug("CLI variables: %s", var)
 
     try:
+        click.echo()  # Add newline before
         click.echo(Style.header("Starting agent..."))
         run_agent_interactive(dir, agent, var_files=var_file, cli_vars=var)
+        click.echo()  # Add newline after
     except Exception as e:
         logger.exception("Error running agent.")
         click.echo(Style.error(str(e)))
