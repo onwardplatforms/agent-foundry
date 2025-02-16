@@ -27,12 +27,38 @@ logger = logging.getLogger(__name__)
 
 # ANSI color codes
 GRAY = "\033[90m"
+CYAN = "\033[96m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RED = "\033[91m"
+BOLD = "\033[1m"
 RESET = "\033[0m"
 
 
 def print_action(message: str) -> None:
-    """Print an agent action message in gray."""
-    print(f"{GRAY}» {message}...{RESET}")
+    """Print an agent action message with clear formatting."""
+    print(f"\n{GRAY}┌ {message}{RESET}")
+
+
+def print_subaction(message: str) -> None:
+    """Print a sub-action with indentation."""
+    print(f"{GRAY}├─ {message}{RESET}")
+
+
+def print_result(message: str, success: bool = True) -> None:
+    """Print a result message with appropriate coloring."""
+    color = GREEN if success else RED
+    symbol = "✓" if success else "✗"
+    print(f"{GRAY}└ {color}{symbol} {message}{RESET}\n")
+
+
+def print_file_header(
+    path: str, start_line: Optional[int] = None, end_line: Optional[int] = None
+) -> None:
+    """Print a file header with optional line range."""
+    line_info = f" ({start_line}-{end_line})" if start_line and end_line else ""
+    print(f"\n{CYAN}{BOLD}● {path}{line_info}{RESET}")
+    print(f"{GRAY}{'─' * (len(path) + len(line_info) + 2)}{RESET}")
 
 
 class ChangeType(Enum):
@@ -1030,17 +1056,20 @@ class CodeEditorV2Plugin:
             logger.debug(f"New content: {new_content}")
             logger.debug(f"Match type: {match_type}")
 
-            print_action(f"Updating code in {path}")
+            print_action("Preparing to update code")
+            print_file_header(path)
 
             # Stage the file in our Git repo
             file_path = Path(path)
             if not file_path.is_absolute():
                 file_path = self.workspace_root / file_path
             temp_path = self.git_editor._stage_file_for_edit(file_path)
+            print_subaction("File staged for editing")
 
             # Read current content
             with open(temp_path, "r", encoding="utf-8") as f:
                 file_content = f.read()
+            print_subaction("Current content loaded")
 
             # Create target snippet object
             target = self._create_snippet(
@@ -1059,11 +1088,17 @@ class CodeEditorV2Plugin:
             )
 
             if not match_result.matched:
+                print_result(
+                    f"Could not find matching code: {match_result.error_message}", False
+                )
                 return (
                     f"Error: Could not find matching code. {match_result.error_message}"
                 )
 
             if not match_result.context_matches:
+                print_subaction(
+                    f"{YELLOW}Warning: Found match but context differs significantly{RESET}"
+                )
                 logger.warning("Found match but context differs significantly")
 
             # Get the matched lines and their indentation
@@ -1138,29 +1173,19 @@ class CodeEditorV2Plugin:
             with open(temp_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
 
-            print_action(
-                f"Added update change for lines {match_result.start_line}-{match_result.end_line}"
+            print_result(
+                f"Updated code at lines {match_result.start_line}-{match_result.end_line} ({match_result.match_type} match)"
             )
-            logger.debug(
-                f"Queued update change in {path} "
-                f"(lines {match_result.start_line}-{match_result.end_line}, "
-                f"match_type={match_result.match_type})"
+            return (
+                f"Successfully updated code:\n"
+                f"- File: {path}\n"
+                f"- Lines: {match_result.start_line}-{match_result.end_line}\n"
+                f"- Match type: {match_result.match_type}"
             )
-
-            # Automatically apply changes
-            result = self.apply_changes()
-            if "Successfully applied changes" in result:
-                return (
-                    f"Successfully updated code:\n"
-                    f"- File: {path}\n"
-                    f"- Lines: {match_result.start_line}-{match_result.end_line}\n"
-                    f"- Match type: {match_result.match_type}"
-                )
-            else:
-                return f"Error applying changes: {result}"
 
         except Exception as e:
             logger.error(f"Error updating code in {path}: {str(e)}")
+            print_result(f"Error updating code: {str(e)}", False)
             return f"Error updating code: {str(e)}"
 
     @kernel_function(description="Delete code that matches a target snippet.")
@@ -2018,10 +2043,6 @@ class CodeEditorV2Plugin:
                     "fix_cmd": ["black", str(file_path)] if fix else None,
                 },
                 ".js": {
-                    "cmd": ["eslint", str(file_path)],
-                    "fix_cmd": ["eslint", "--fix", str(file_path)] if fix else None,
-                },
-                ".ts": {
                     "cmd": ["eslint", str(file_path)],
                     "fix_cmd": ["eslint", "--fix", str(file_path)] if fix else None,
                 },
