@@ -108,16 +108,12 @@ class CodeSnippet:
         """
         lines = []
         for line in content.splitlines():
-            # Remove trailing whitespace but preserve leading whitespace
+            # Replace tabs with four spaces (for instance)
+            line = line.replace("\t", "    ")
+            # Strip only trailing whitespace
             line = line.rstrip()
-            # Normalize indentation to use spaces
-            if line:
-                indent = len(line) - len(line.lstrip())
-                normalized_line = " " * indent + line.lstrip()
-                lines.append(normalized_line)
-            else:
-                lines.append("")  # Preserve empty lines
-
+            # Keep leading spaces as-is
+            lines.append(line)
         return "\n".join(lines)
 
 
@@ -468,9 +464,6 @@ class CodeEditorV2Plugin:
     """
 
     PLUGIN_INSTRUCTIONS = """
-    Code Editor V2 Plugin - Usage Guide
-    =================================
-
     WORKFLOW FOR CODE CHANGES:
     1. READ FIRST: Always read and understand the code before making changes
        - Use search_code to find relevant code
@@ -489,6 +482,8 @@ class CodeEditorV2Plugin:
 
     4. VERIFY CHANGES:
        - Review the changes before applying
+       - Run linting to check for issues (use lint_code)
+       - Fix any linting issues before proceeding
        - Check for syntax errors or structural issues
        - Verify all issues were addressed
 
@@ -496,6 +491,14 @@ class CodeEditorV2Plugin:
        - Explain what you changed and why
        - If you're unsure about something, say so
        - If you need more information, ask for it
+       - Prefer detailed summaries rather than full code blocks in output
+
+    LINTING AND FORMATTING:
+    - Use lint_code to check for code style and potential issues
+    - Supports multiple languages (Python, JavaScript, TypeScript, Go, JSON, YAML)
+    - Can automatically fix some issues with the fix=True parameter
+    - Always run linting after making code changes to ensure code quality
+    - Address linting issues before applying changes
 
     Remember: Think like a human programmer. Don't rush to make changes without understanding the full context.
     """
@@ -1891,3 +1894,122 @@ class CodeEditorV2Plugin:
             return self.git_editor.get_change_history(path)
         except Exception as e:
             return f"Error getting change history: {str(e)}"
+
+    @kernel_function(
+        description="Lint code in a file using language-appropriate linters."
+    )
+    def lint_code(
+        self,
+        path: str,
+        fix: bool = False,
+    ) -> str:
+        """
+        Lint code in a file using language-appropriate linters.
+
+        Args:
+            path (str): Path to the file to lint
+            fix: Whether to attempt to fix linting issues automatically
+
+        Returns:
+            str: Linting results or error message
+        """
+        try:
+            print_action(f"Linting file: {path}")
+
+            # Validate and get file path
+            file_path = self._validate_path(path)
+            if not file_path.is_file():
+                return f"Error: File '{path}' does not exist or is not a regular file."
+
+            # Detect language from file extension
+            ext = file_path.suffix.lower()
+
+            # Map of extensions to linting commands
+            lint_commands = {
+                ".py": {
+                    "cmd": ["flake8", str(file_path)],
+                    "fix_cmd": ["black", str(file_path)] if fix else None,
+                },
+                ".js": {
+                    "cmd": ["eslint", str(file_path)],
+                    "fix_cmd": ["eslint", "--fix", str(file_path)] if fix else None,
+                },
+                ".ts": {
+                    "cmd": ["eslint", str(file_path)],
+                    "fix_cmd": ["eslint", "--fix", str(file_path)] if fix else None,
+                },
+                ".go": {
+                    "cmd": ["golint", str(file_path)],
+                    "fix_cmd": ["gofmt", "-w", str(file_path)] if fix else None,
+                },
+                ".json": {
+                    "cmd": ["jsonlint", str(file_path)],
+                    "fix_cmd": None,  # No auto-fix for JSON
+                },
+                ".yaml": {
+                    "cmd": ["yamllint", str(file_path)],
+                    "fix_cmd": None,  # No auto-fix for YAML
+                },
+                ".yml": {
+                    "cmd": ["yamllint", str(file_path)],
+                    "fix_cmd": None,  # No auto-fix for YAML
+                },
+                ".tf": {
+                    "cmd": ["tflint", "--format=compact", str(file_path)],
+                    "fix_cmd": ["terraform", "fmt", str(file_path)] if fix else None,
+                },
+                ".tfvars": {
+                    "cmd": ["tflint", "--format=compact", str(file_path)],
+                    "fix_cmd": ["terraform", "fmt", str(file_path)] if fix else None,
+                },
+            }
+
+            if ext not in lint_commands:
+                return f"Error: No linter configured for files with extension '{ext}'"
+
+            commands = lint_commands[ext]
+            results = []
+
+            # Run the linter
+            try:
+                result = subprocess.run(
+                    commands["cmd"],
+                    capture_output=True,
+                    text=True,
+                    check=False,  # Don't raise on linting errors
+                )
+
+                if result.returncode == 0:
+                    results.append("No linting issues found.")
+                else:
+                    results.append("Linting issues found:")
+                    results.append(result.stdout.strip() or result.stderr.strip())
+
+                    # If fix is requested and a fix command exists
+                    if fix and commands["fix_cmd"]:
+                        results.append("\nAttempting to fix issues...")
+                        fix_result = subprocess.run(
+                            commands["fix_cmd"],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+
+                        if fix_result.returncode == 0:
+                            results.append("Successfully fixed linting issues.")
+                        else:
+                            results.append("Failed to fix some issues:")
+                            results.append(
+                                fix_result.stdout.strip() or fix_result.stderr.strip()
+                            )
+
+            except FileNotFoundError:
+                return f"Error: Required linting tools not found for {ext} files."
+            except Exception as e:
+                return f"Error running linter: {str(e)}"
+
+            return "\n".join(results)
+
+        except Exception as e:
+            logger.error(f"Error linting file {path}: {str(e)}")
+            return f"Error linting file: {str(e)}"
