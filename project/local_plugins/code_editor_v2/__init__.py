@@ -529,7 +529,7 @@ class CodeEditorV2Plugin:
         # Add the handler to the logger
         self.logger.addHandler(file_handler)
 
-        self.logger.info(
+        self.logger.debug(
             "CodeEditorV2Plugin initialized with Git-based version control"
         )
 
@@ -675,14 +675,14 @@ class CodeEditorV2Plugin:
 
             if target_path.is_file():
                 print_action(f"Deleting file {path}")
-                logger.info(f"Deleting file: {path}")
+                logger.debug(f"Deleting file: {path}")
                 target_path.unlink()
                 return f"Successfully deleted file: {path}"
             elif target_path.is_dir():
                 if not recursive:
                     return f"Error: '{path}' is a directory. Use recursive=True to delete directories."
                 print_action(f"Recursively deleting directory {path}")
-                logger.info(f"Recursively deleting directory: {path}")
+                logger.debug(f"Recursively deleting directory: {path}")
                 shutil.rmtree(target_path)
                 return f"Successfully deleted directory: {path}"
             else:
@@ -710,7 +710,7 @@ class CodeEditorV2Plugin:
                 return f"Error: Path '{path}' does not exist."
 
             print_action(f"Generating directory tree for {path}")
-            logger.info(f"Listing directory tree for: {path}")
+            logger.debug(f"Listing directory tree for: {path}")
 
             def format_size(size_bytes: int) -> str:
                 """Format file size in human-readable format."""
@@ -1095,7 +1095,7 @@ class CodeEditorV2Plugin:
             print_action(
                 f"Added update change for lines {match_result.start_line}-{match_result.end_line}"
             )
-            logger.info(
+            logger.debug(
                 f"Queued update change in {path} "
                 f"(lines {match_result.start_line}-{match_result.end_line}, "
                 f"match_type={match_result.match_type})"
@@ -1192,7 +1192,7 @@ class CodeEditorV2Plugin:
             print_action(
                 f"Added delete change for lines {match_result.start_line}-{match_result.end_line}"
             )
-            logger.info(
+            logger.debug(
                 f"Queued delete change in {path} "
                 f"(lines {match_result.start_line}-{match_result.end_line}, "
                 f"match_type={match_result.match_type})"
@@ -1298,7 +1298,7 @@ class CodeEditorV2Plugin:
             print_action(
                 f"Added insert change for lines {match_result.start_line}-{match_result.end_line}"
             )
-            logger.info(
+            logger.debug(
                 f"Queued insert change in {path} "
                 f"(lines {match_result.start_line}-{match_result.end_line}, "
                 f"match_type={match_result.match_type})"
