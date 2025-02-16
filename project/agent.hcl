@@ -70,8 +70,10 @@ plugin "local" "echo" {
 }
 
 plugin "local" "code_editor" {
-  source = "./local_plugins/code_editor"
-  variables = {}
+  source = "./local_plugins/code_editor_v2"
+  variables = {
+    workspace_root = "."
+  }
 }
 
 plugin "remote" "echo" {
@@ -89,6 +91,7 @@ agent "local" {
     Be curious, searching files and looking for the right information.
     Follow the workflow guidelines in the CodeEditorPlugin instructions carefully.
     Think like a human programmer - understand before changing, verify after changing.
+    Always check your work after changing code to confirm it is correct.
     EOT
   model          = model.llama2_instance
   plugins        = [plugin.local.echo, plugin.local.code_editor]

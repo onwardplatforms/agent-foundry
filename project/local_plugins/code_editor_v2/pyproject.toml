@@ -1,0 +1,27 @@
+[tool.pytest.ini_options]
+testpaths = ["."]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "code_editor_v2: Tests for the CodeEditorV2Plugin"
+]
+addopts = [
+    "--verbose",
+    "-ra",
+    "--strict-markers"
+]
+
+[tool.pytest]
+norecursedirs = [
+    ".*",
+    "build",
+    "dist",
+    "CVS",
+    "_darcs",
+    "{arch}",
+    "*.egg",
+    "venv",
+    "env",
+    "virtualenv"
+]
