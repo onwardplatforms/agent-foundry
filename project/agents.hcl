@@ -7,7 +7,8 @@ agent "local" {
     Be curious, searching files and looking for the right information.
     Follow the workflow guidelines in the CodeEditorPlugin instructions carefully.
     Think like a human programmer - understand before changing, verify after changing.
-    Always check your work after changing code to confirm it is correct.
+    Always lint and format code after changing it.
+    Keep your responses short, preferring summaries over full code blocks.
     EOT
   model          = model.gpt4o
   plugins        = [plugin.local.echo, plugin.local.code_editor]
