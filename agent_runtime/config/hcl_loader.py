@@ -24,10 +24,18 @@ class SchemaValidator:
     REF_PATTERN = re.compile(r"\$\{([^}]+)\}")
 
     def __init__(self):
-        pass
+        # Load the schema from the JSON file
+        schema_path = Path(__file__).parent.parent / "schema" / "agent_schema.json"
+        logger.debug(f"Loading schema from: {schema_path}")
+        with open(schema_path, "r") as f:
+            self.schema = json.load(f)
+        logger.debug(f"Loaded schema version: {self.schema.get('format_version')}")
 
     def validate(self, raw_config: Dict[str, Any]) -> List[str]:
         errors: List[str] = []
+        logger.debug(
+            f"Starting validation of config: {json.dumps(raw_config, indent=2)}"
+        )
 
         # First collect all defined names and their structures
         self.defined_vars: Dict[str, Any] = {}
@@ -35,36 +43,240 @@ class SchemaValidator:
         self.defined_plugins: Dict[str, Any] = {}
         self.defined_agents: Dict[str, Any] = {}
 
-        # Extract variable definitions with their structure
-        for var_block in raw_config.get("variable", []):
-            if isinstance(var_block, dict):
-                for name, content in var_block.items():
-                    self.defined_vars[name] = content
+        # Extract and validate each block type
+        for block_type, blocks in raw_config.items():
+            logger.debug(f"Validating block type: {block_type}")
 
-        # Extract model definitions with their structure
-        for model_block in raw_config.get("model", []):
-            if isinstance(model_block, dict):
-                for name, content in model_block.items():
-                    self.defined_models[name] = content
+            # Skip if block type not in schema
+            if block_type not in self.schema["schemas"]:
+                errors.append(f"Unknown block type: {block_type}")
+                continue
 
-        # Extract plugin definitions with their structure
-        for plugin_block in raw_config.get("plugin", []):
-            if isinstance(plugin_block, dict):
-                for plugin_type, inner in plugin_block.items():
-                    if isinstance(inner, dict):
-                        for plugin_name, content in inner.items():
-                            self.defined_plugins[f"{plugin_type}:{plugin_name}"] = (
-                                content
+            block_schema = self.schema["schemas"][block_type]
+            logger.debug(
+                f"Using schema for {block_type}: {json.dumps(block_schema, indent=2)}"
+            )
+
+            if not isinstance(blocks, list):
+                errors.append(
+                    f"Expected list of {block_type} blocks, got {type(blocks)}"
+                )
+                continue
+
+            # Validate each block of this type
+            for block in blocks:
+                if not isinstance(block, dict):
+                    errors.append(
+                        f"Expected dictionary for {block_type} block, got {type(block)}"
+                    )
+                    continue
+
+                # Special handling for plugin blocks which have a nested structure
+                if block_type == "plugin":
+                    for plugin_type, plugin_blocks in block.items():
+                        # Validate plugin type
+                        if plugin_type not in block_schema:
+                            errors.append(
+                                f"Unknown plugin type '{plugin_type}', must be one of: {', '.join(k for k in block_schema.keys() if k != 'version')}"
+                            )
+                            continue
+
+                        if not isinstance(plugin_blocks, dict):
+                            errors.append(
+                                f"Expected dictionary for plugin type '{plugin_type}', got {type(plugin_blocks)}"
+                            )
+                            continue
+
+                        # Get the schema for this plugin type
+                        type_schema = block_schema[plugin_type]
+
+                        for plugin_name, plugin_content in plugin_blocks.items():
+                            logger.debug(
+                                f"Validating plugin block '{plugin_type}.{plugin_name}': {json.dumps(plugin_content, indent=2)}"
                             )
 
-        # Extract agent definitions with their structure
-        for agent_block in raw_config.get("agent", []):
-            if isinstance(agent_block, dict):
-                for name, content in agent_block.items():
-                    self.defined_agents[name] = content
+                            # Store for reference validation
+                            plugin_key = f"{plugin_type}:{plugin_name}"
+                            self.defined_plugins[plugin_key] = plugin_content
+
+                            # Validate against type-specific schema
+                            block_errors = self._validate_block_content(
+                                plugin_content,
+                                type_schema["block"],
+                                f"plugin.{plugin_type}.{plugin_name}",
+                            )
+                            errors.extend(block_errors)
+                else:
+                    # For non-plugin blocks, they just have a single label for identification
+                    for block_name, block_content in block.items():
+                        logger.debug(
+                            f"Validating {block_type} block '{block_name}': {json.dumps(block_content, indent=2)}"
+                        )
+
+                        # Store in appropriate collection for reference validation
+                        if block_type == "variable":
+                            self.defined_vars[block_name] = block_content
+                        elif block_type == "model":
+                            self.defined_models[block_name] = block_content
+                        elif block_type == "agent":
+                            self.defined_agents[block_name] = block_content
+
+                        # Get the schema - for non-plugin blocks it's directly in the block field
+                        block_schema_to_use = block_schema["block"]
+
+                        # Validate the block content against the schema
+                        block_errors = self._validate_block_content(
+                            block_content,
+                            block_schema_to_use,
+                            f"{block_type}.{block_name}",
+                        )
+                        errors.extend(block_errors)
 
         # Now validate all references in the config
+        logger.debug("Starting reference validation")
         self._validate_references_in_dict(raw_config, errors)
+
+        if errors:
+            logger.debug("Validation failed with errors: %s", errors)
+        else:
+            logger.debug("Configuration validation successful")
+
+        return errors
+
+    def _validate_block_content(
+        self, content: Dict[str, Any], schema: Dict[str, Any], path: str
+    ) -> List[str]:
+        """Validate a block's content against its schema."""
+        errors = []
+
+        # If content is not a dictionary, validate it directly as an attribute
+        if not isinstance(content, dict):
+            # Find the attribute schema for this path
+            path_parts = path.split(".")
+            if len(path_parts) >= 2:
+                block_type, attr_name = path_parts[-2:]
+                block_schema = self.schema["schemas"].get(block_type)
+                if block_schema:
+                    attr_schema = block_schema["block"]["attributes"].get(attr_name)
+                    if attr_schema:
+                        attr_errors = self._validate_attribute(
+                            content, attr_schema, path
+                        )
+                        errors.extend(attr_errors)
+                    else:
+                        errors.append(f"In {path}: Unknown attribute '{attr_name}'")
+            return errors
+
+        # Get all valid attribute names from schema
+        valid_attributes = set(schema.get("attributes", {}).keys())
+        valid_block_types = set(schema.get("block_types", {}).keys())
+
+        # Check for unknown attributes (only for non-map attributes)
+        for attr_name, attr_value in content.items():
+            # Skip validation if this attribute is a map type (allows arbitrary keys)
+            attr_schema = schema.get("attributes", {}).get(attr_name)
+            if attr_schema and attr_schema.get("type") == "map":
+                continue
+
+            if attr_name not in valid_attributes and attr_name not in valid_block_types:
+                errors.append(f"In {path}: Unknown attribute '{attr_name}'")
+
+        # Validate required attributes
+        if "attributes" in schema:
+            for attr_name, attr_schema in schema["attributes"].items():
+                if attr_schema.get("required", False) and attr_name not in content:
+                    errors.append(
+                        f"In {path}: Missing required attribute '{attr_name}'"
+                    )
+                elif attr_name in content:
+                    attr_value = content[attr_name]
+                    attr_errors = self._validate_attribute(
+                        attr_value, attr_schema, f"{path}.{attr_name}"
+                    )
+                    errors.extend(attr_errors)
+
+        # Validate nested blocks
+        if "block_types" in schema:
+            for block_type, block_schema in schema["block_types"].items():
+                if block_type in content:
+                    if not isinstance(content[block_type], dict):
+                        errors.append(
+                            f"In {path}.{block_type}: Expected dictionary, got {type(content[block_type]).__name__}"
+                        )
+                    else:
+                        block_errors = self._validate_block_content(
+                            content[block_type],
+                            block_schema["block"],
+                            f"{path}.{block_type}",
+                        )
+                        errors.extend(block_errors)
+
+        return errors
+
+    def _validate_attribute(
+        self, value: Any, schema: Dict[str, Any], path: str
+    ) -> List[str]:
+        """Validate a single attribute against its schema."""
+        errors = []
+        attr_type = schema.get("type")
+
+        logger.debug(
+            f"Validating attribute at {path}: {value} against schema: {schema}"
+        )
+
+        # Special handling for 'any' type - accept anything
+        if attr_type == "any":
+            return errors
+
+        # For block types, validate as a dictionary
+        if isinstance(value, dict):
+            # If it's a dictionary but schema expects a primitive, that's an error
+            if attr_type in ["string", "number", "bool"]:
+                errors.append(f"In {path}: Expected {attr_type}, got dictionary")
+            return errors
+
+        # For primitive types, validate according to schema
+        if attr_type == "string":
+            if not isinstance(value, str):
+                errors.append(f"In {path}: Expected string, got {type(value).__name__}")
+            elif "pattern" in schema:
+                pattern = re.compile(schema["pattern"])
+                if not pattern.match(str(value)):
+                    errors.append(
+                        f"In {path}: Value '{value}' does not match pattern {schema['pattern']}"
+                    )
+            elif "options" in schema and value not in schema["options"]:
+                errors.append(
+                    f"In {path}: Value '{value}' must be one of: {', '.join(schema['options'])}"
+                )
+
+        elif attr_type == "number":
+            if not isinstance(value, (int, float)):
+                errors.append(f"In {path}: Expected number, got {type(value).__name__}")
+            elif "constraints" in schema:
+                constraints = schema["constraints"]
+                if "min" in constraints and value < constraints["min"]:
+                    errors.append(
+                        f"In {path}: Value {value} must be greater than or equal to {constraints['min']}"
+                    )
+                if "max" in constraints and value > constraints["max"]:
+                    errors.append(
+                        f"In {path}: Value {value} must be less than or equal to {constraints['max']}"
+                    )
+
+        elif attr_type == "bool":
+            if not isinstance(value, bool):
+                errors.append(
+                    f"In {path}: Expected boolean, got {type(value).__name__}"
+                )
+
+        elif attr_type == "list":
+            if not isinstance(value, list):
+                errors.append(f"In {path}: Expected list, got {type(value).__name__}")
+
+        elif attr_type == "map":
+            if not isinstance(value, dict):
+                errors.append(f"In {path}: Expected map, got {type(value).__name__}")
 
         return errors
 
@@ -108,7 +320,7 @@ class SchemaValidator:
         # Handle the root reference first
         if parts[0] == "var":
             if len(parts) < 2:
-                errors.append(f"Invalid variable reference '{ref}' at {path}")
+                errors.append(f"In {path}: Invalid variable reference '{ref}'")
                 return
             var_name = parts[1]
             if var_name not in self.defined_vars:
@@ -116,7 +328,7 @@ class SchemaValidator:
                     ", ".join(sorted(self.defined_vars.keys())) or "none defined"
                 )
                 errors.append(
-                    f"Reference to undefined variable 'var.{var_name}' at {path}\n"
+                    f"In {path}: Reference to undefined variable 'var.{var_name}'\n"
                     f"  Available variables: {available}"
                 )
                 return
@@ -132,7 +344,7 @@ class SchemaValidator:
 
         elif parts[0] == "model":
             if len(parts) < 2:
-                errors.append(f"Invalid model reference '{ref}' at {path}")
+                errors.append(f"In {path}: Invalid model reference '{ref}'")
                 return
             model_name = parts[1]
             if model_name not in self.defined_models:
@@ -140,7 +352,7 @@ class SchemaValidator:
                     ", ".join(sorted(self.defined_models.keys())) or "none defined"
                 )
                 errors.append(
-                    f"Reference to undefined model 'model.{model_name}' at {path}\n"
+                    f"In {path}: Reference to undefined model 'model.{model_name}'\n"
                     f"  Available models: {available}"
                 )
                 return
@@ -156,7 +368,7 @@ class SchemaValidator:
 
         elif parts[0] == "plugin":
             if len(parts) < 3:
-                errors.append(f"Invalid plugin reference '{ref}' at {path}")
+                errors.append(f"In {path}: Invalid plugin reference '{ref}'")
                 return
             plugin_key = f"{parts[1]}:{parts[2]}"
             if plugin_key not in self.defined_plugins:
@@ -164,7 +376,7 @@ class SchemaValidator:
                     ", ".join(sorted(self.defined_plugins.keys())) or "none defined"
                 )
                 errors.append(
-                    f"Reference to undefined plugin 'plugin.{parts[1]}.{parts[2]}' at {path}\n"
+                    f"In {path}: Reference to undefined plugin 'plugin.{parts[1]}.{parts[2]}'\n"
                     f"  Available plugins: {available}"
                 )
                 return
@@ -180,7 +392,7 @@ class SchemaValidator:
 
         elif parts[0] == "agent":
             if len(parts) < 2:
-                errors.append(f"Invalid agent reference '{ref}' at {path}")
+                errors.append(f"In {path}: Invalid agent reference '{ref}'")
                 return
             agent_name = parts[1]
             if agent_name not in self.defined_agents:
@@ -188,7 +400,7 @@ class SchemaValidator:
                     ", ".join(sorted(self.defined_agents.keys())) or "none defined"
                 )
                 errors.append(
-                    f"Reference to undefined agent 'agent.{agent_name}' at {path}\n"
+                    f"In {path}: Reference to undefined agent 'agent.{agent_name}'\n"
                     f"  Available agents: {available}"
                 )
                 return
@@ -220,12 +432,12 @@ class SchemaValidator:
         for i, part in enumerate(parts):
             if not isinstance(current, dict):
                 errors.append(
-                    f"Invalid nested reference '{ref_path}.{'.'.join(parts[:i+1])}' at {path} - parent is not a dictionary"
+                    f"In {path}: Invalid nested reference '{ref_path}.{'.'.join(parts[:i+1])}' - parent is not a dictionary"
                 )
                 return
             if part not in current:
                 errors.append(
-                    f"Invalid nested reference '{ref_path}.{'.'.join(parts[:i+1])}' at {path} - field does not exist"
+                    f"In {path}: Invalid nested reference '{ref_path}.{'.'.join(parts[:i+1])}' - field does not exist"
                 )
                 return
             current = current[part]
@@ -303,6 +515,13 @@ class BlockMerger:
                     full_key = f"{plugin_type}:{plugin_name}"
                     merged = {"type": plugin_type, "name": plugin_name}
                     merged.update(self._convert_block_values(plugin_content))
+
+                    # Add validation for remote plugins requiring version
+                    if plugin_type == "remote" and "version" not in merged:
+                        raise ValueError(
+                            f"Version is required for remote plugin 'plugin.{plugin_type}.{plugin_name}'"
+                        )
+
                     self.plugins[full_key] = merged
 
         elif block_type == "agent":
@@ -617,6 +836,7 @@ class HCLConfigLoader:
 
     def __init__(self, config_dir: Path):
         self.config_dir = config_dir
+        logger.debug(f"Initializing HCLConfigLoader with config_dir: {config_dir}")
         self.validator = SchemaValidator()
         self.merger = BlockMerger()
         # final data
@@ -686,7 +906,7 @@ class HCLConfigLoader:
         Returns list of raw configs if no errors. Otherwise raise an error.
         """
         hcl_files = list(self.config_dir.glob("*.hcl"))
-        logger.debug("Found HCL files: %s", hcl_files)
+        logger.debug(f"Found HCL files: {[f.name for f in hcl_files]}")
 
         # First load all files without validation
         raw_configs: List[Dict[str, Any]] = []
@@ -695,11 +915,15 @@ class HCLConfigLoader:
         for f in hcl_files:
             try:
                 with open(f, "r") as fp:
-                    logger.debug("Loading HCL file: %s", f)
+                    logger.debug(f"Loading HCL file: {f.name}")
                     rc = hcl2.load(fp)
+                    logger.debug(
+                        f"Loaded content from {f.name}: {json.dumps(rc, indent=2)}"
+                    )
                     raw_configs.append(rc)
             except Exception as e:
-                parse_errors.append(f"Error parsing {f.name}: {str(e)}")
+                error_msg = f"Error parsing {f.name}: {str(e)}"
+                parse_errors.append(error_msg)
 
         if parse_errors:
             msg = "HCL parsing failed:\n" + "\n".join(parse_errors)
@@ -713,14 +937,20 @@ class HCLConfigLoader:
         for rc in raw_configs:
             for key in merged_config:
                 if key in rc:
+                    logger.debug(f"Merging {len(rc[key])} {key} blocks from config")
                     merged_config[key].extend(rc[key])
+
+        logger.debug("Merged configuration complete, starting validation")
+        logger.debug(f"Merged config: {json.dumps(merged_config, indent=2)}")
 
         # Now validate the merged config
         validation_errors = self.validator.validate(merged_config)
         if validation_errors:
-            msg = "Configuration validation failed:\n" + "\n".join(validation_errors)
-            raise RuntimeError(msg)
+            raise RuntimeError(
+                "Configuration validation failed:\n" + "\n".join(validation_errors)
+            )
 
+        logger.debug("Configuration validation successful")
         return [merged_config]  # Return merged config as single item
 
 

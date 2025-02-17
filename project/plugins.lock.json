@@ -12,7 +12,7 @@
       "scoped_name": "@local/code_editor",
       "source": "./local_plugins/code_editor_v2",
       "type": "local",
-      "sha": "fedb274f484816dfd70365883c34b7081e4fa7a2a3bbc968a30e8983f8b5ac3f"
+      "sha": "b96c6978952b7ccfc91c8387786d0397fdc34024ce74e0bd1013aaf72a3785bb"
     },
     {
       "name": "echo",

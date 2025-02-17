@@ -99,24 +99,43 @@
         },
         "plugin": {
             "version": 1,
-            "block": {
-                "attributes": {
-                    "source": {
-                        "type": "string",
-                        "required": true,
-                        "description": "Source path or URL",
-                        "pattern": "^(\\.\\/.*|\\.\\.\\/.*|https://github\\.com/[\\w-]+/[\\w-]+|[\\w-]+/[\\w-]+)$"
-                    },
-                    "version": {
-                        "type": "string",
-                        "required": false,
-                        "description": "Version (required for remote plugins)",
-                        "pattern": "^v?\\d+\\.\\d+\\.\\d+(-[\\w.]+)?$"
-                    },
-                    "variables": {
-                        "type": "map",
-                        "required": false,
-                        "description": "Variables to pass to the plugin"
+            "local": {
+                "block": {
+                    "attributes": {
+                        "source": {
+                            "type": "string",
+                            "required": true,
+                            "description": "Local source path",
+                            "pattern": "^(\\./.*)|(\\.\\./.*)$"
+                        },
+                        "variables": {
+                            "type": "map",
+                            "required": false,
+                            "description": "Variables to pass to the plugin"
+                        }
+                    }
+                }
+            },
+            "remote": {
+                "block": {
+                    "attributes": {
+                        "source": {
+                            "type": "string",
+                            "required": true,
+                            "description": "Remote source identifier - either a full GitHub URL (https://github.com/org/agentruntime-plugin-name) or shorthand (org/name)",
+                            "pattern": "^(?:(?:https://)?github\\.com/([\\w-]+)/agentruntime-plugin-([\\w-]+)|([\\w-]+)/([\\w-]+))$"
+                        },
+                        "version": {
+                            "type": "string",
+                            "required": true,
+                            "description": "Version of the remote plugin",
+                            "pattern": "^v?\\d+\\.\\d+\\.\\d+(-[\\w.]+)?$"
+                        },
+                        "variables": {
+                            "type": "map",
+                            "required": false,
+                            "description": "Variables to pass to the plugin"
+                        }
                     }
                 }
             }

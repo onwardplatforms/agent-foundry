@@ -122,7 +122,9 @@ class PluginConfig:
             if len(parts) < 2:
                 raise ValueError(f"Invalid GitHub URL: {self.source}")
             org = parts[0]
-            plugin_name = parts[1]
+            repo = parts[1]
+            # Extract plugin name by removing agentruntime-plugin- prefix if present
+            plugin_name = repo.replace("agentruntime-plugin-", "")
         else:
             # Handle org/plugin shorthand
             parts = self.source.split("/")
@@ -130,9 +132,8 @@ class PluginConfig:
                 raise ValueError(f"Invalid plugin shorthand: {self.source}")
             org = parts[0]
             plugin_name = parts[1]
-
-        # Construct the actual repository name with the agentruntime-plugin prefix
-        repo = f"agentruntime-plugin-{plugin_name}"
+            # Construct the repository name with the agentruntime-plugin prefix
+            repo = f"agentruntime-plugin-{plugin_name}"
 
         return {
             "org": org,

@@ -66,6 +66,55 @@ def cli(debug: bool) -> None:
     set_debug_logging(debug)
 
 
+def _handle_validation_error(e: Exception, command_name: str) -> None:
+    """Handle validation errors in a consistent way across commands."""
+    error_msg = str(e)
+    if "Configuration validation failed:" in error_msg:
+        # Split into individual validation errors
+        parts = error_msg.split("Configuration validation failed:")
+        error_list = [err.strip() for err in parts[1].split("\n") if err.strip()]
+
+        click.echo()  # Add newline before
+        click.echo(Style.error(f"Error: Failed to {command_name}"))
+        click.echo()
+        click.echo("The configuration is invalid. The following errors were found:")
+        click.echo()
+
+        # Output each error with proper indentation and bullet points
+        for err in error_list:
+            click.echo(Style.error(f"  • {err}"))
+
+        click.echo()  # Add newline after
+    else:
+        # For non-validation errors, use simpler format but try to extract block references
+        click.echo()  # Add newline before
+        click.echo(Style.error(f"Error: Failed to {command_name}"))
+        click.echo()
+
+        # Check if the error message contains a block reference
+        if (
+            "plugin." in error_msg
+            or "model." in error_msg
+            or "variable." in error_msg
+            or "agent." in error_msg
+        ):
+            # The error already contains the block reference
+            click.echo(f"  {error_msg}")
+        else:
+            # Try to infer context from the error message
+            if "plugin" in error_msg.lower():
+                click.echo("  In plugin configuration:")
+            elif "model" in error_msg.lower():
+                click.echo("  In model configuration:")
+            elif "variable" in error_msg.lower():
+                click.echo("  In variable configuration:")
+            elif "agent" in error_msg.lower():
+                click.echo("  In agent configuration:")
+            click.echo(f"    {error_msg}")
+
+        click.echo()
+
+
 @cli.command()
 @click.option(
     "--dir",
@@ -84,7 +133,7 @@ def validate(dir: Path) -> None:
         click.echo(Style.success("Configuration is valid."))
         click.echo()  # Add newline after
     except Exception as e:
-        click.echo(Style.error(str(e)))
+        _handle_validation_error(e, "validate configuration")
         raise SystemExit(1)
 
 
@@ -105,11 +154,13 @@ def init(dir: Path, agent: Optional[str] = None) -> None:
     logger.debug("Initializing agents from directory: %s (agent=%s)", dir, agent)
     try:
         click.echo()  # Add newline before
+        # First validate the configuration
+        load_and_validate_config(dir)
+        # Then initialize plugins if validation passes
         init_plugins(dir, agent)
         click.echo()  # Add newline after
     except Exception as e:
-        logger.exception("Failed to init plugins.")
-        click.echo(Style.error(f"Failed to init plugins: {e}"))
+        _handle_validation_error(e, "initialize plugins")
         raise SystemExit(1)
 
 

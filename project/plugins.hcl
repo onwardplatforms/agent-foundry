@@ -13,7 +13,7 @@ plugin "local" "code_editor" {
 }
 
 plugin "remote" "echo" {
-  source = "onwardplatforms/echo"
+  source = "https://github.com/onwardplatforms/agentruntime-plugin-echo"
   version = "0.0.1"
   variables = {}
 }
