@@ -10,9 +10,9 @@
     {
       "name": "code_editor",
       "scoped_name": "@local/code_editor",
-      "source": "./local_plugins/code_editor",
+      "source": "./local_plugins/code_editor_v2",
       "type": "local",
-      "sha": "8c11d8fa2943cce4b143ae30e94859899df53e9c790061a7d69aaee4b2252484"
+      "sha": "fedb274f484816dfd70365883c34b7081e4fa7a2a3bbc968a30e8983f8b5ac3f"
     },
     {
       "name": "echo",

@@ -7,7 +7,7 @@ class Style:
     """Terminal styling constants."""
 
     HEADER = click.style("»", fg="cyan", bold=True)
-    SUCCESS = click.style("✓", fg="green", bold=True)
+    SUCCESS = click.style("✓", fg="bright_green", bold=True)
     ERROR = click.style("✗", fg="red", bold=True)
     WARNING = click.style("!", fg="yellow", bold=True)
     INFO = click.style("»", fg="blue", bold=True)
@@ -15,7 +15,7 @@ class Style:
     @staticmethod
     def header(text: str) -> str:
         """Format a header message."""
-        return f"\n{Style.HEADER} {click.style(text, bold=True)}\n"
+        return f"{Style.HEADER} {click.style(text, bold=True)}"
 
     @staticmethod
     def success(text: str) -> str:

@@ -27,12 +27,38 @@ logger = logging.getLogger(__name__)
 
 # ANSI color codes
 GRAY = "\033[90m"
+CYAN = "\033[96m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RED = "\033[91m"
+BOLD = "\033[1m"
 RESET = "\033[0m"
 
 
 def print_action(message: str) -> None:
-    """Print an agent action message in gray."""
-    print(f"{GRAY}» {message}...{RESET}")
+    """Print an agent action message with clear formatting."""
+    print(f"\n{GRAY}┌ {message}{RESET}")
+
+
+def print_subaction(message: str) -> None:
+    """Print a sub-action with indentation."""
+    print(f"{GRAY}├─ {message}{RESET}")
+
+
+def print_result(message: str, success: bool = True) -> None:
+    """Print a result message with appropriate coloring."""
+    color = GREEN if success else RED
+    symbol = "✓" if success else "✗"
+    print(f"{GRAY}└ {color}{symbol} {message}{RESET}\n")
+
+
+def print_file_header(
+    path: str, start_line: Optional[int] = None, end_line: Optional[int] = None
+) -> None:
+    """Print a file header with optional line range."""
+    line_info = f" ({start_line}-{end_line})" if start_line and end_line else ""
+    print(f"\n{CYAN}{BOLD}● {path}{line_info}{RESET}")
+    print(f"{GRAY}{'─' * (len(path) + len(line_info) + 2)}{RESET}")
 
 
 class ChangeType(Enum):
@@ -108,16 +134,12 @@ class CodeSnippet:
         """
         lines = []
         for line in content.splitlines():
-            # Remove trailing whitespace but preserve leading whitespace
+            # Replace tabs with four spaces (for instance)
+            line = line.replace("\t", "    ")
+            # Strip only trailing whitespace
             line = line.rstrip()
-            # Normalize indentation to use spaces
-            if line:
-                indent = len(line) - len(line.lstrip())
-                normalized_line = " " * indent + line.lstrip()
-                lines.append(normalized_line)
-            else:
-                lines.append("")  # Preserve empty lines
-
+            # Keep leading spaces as-is
+            lines.append(line)
         return "\n".join(lines)
 
 
@@ -468,37 +490,73 @@ class CodeEditorV2Plugin:
     """
 
     PLUGIN_INSTRUCTIONS = """
-    Code Editor V2 Plugin - Usage Guide
-    =================================
+    HOW I WORK:
+    I am a proactive coding assistant that handles code changes with careful consideration of dependencies and side effects.
+    My primary focus is on making reliable, verified changes across multiple files when needed.
 
-    WORKFLOW FOR CODE CHANGES:
-    1. READ FIRST: Always read and understand the code before making changes
-       - Use search_code to find relevant code
-       - Read the complete content of files you plan to modify
-       - Understand the structure and dependencies
+    1. SEARCH FIRST, CHANGE LATER
+       Before making ANY changes:
+       - ALWAYS use search_across_files() first to find ALL related code
+       - ALWAYS use find_references() to catch ALL dependencies
+       - Document everything I find before proceeding
+       - If a change affects multiple files, list ALL files that need updating
 
-    2. PLAN CHANGES:
-       - Identify the exact snippets to modify
-       - Consider how changes might affect other parts of the code
-       - Plan your changes before executing them
+    2. PLAN COMPLETELY
+       For each set of related changes:
+       - List ALL files that need to be modified
+       - Explain ALL changes that will be made
+       - Show how the changes are connected
+       - Get confirmation before proceeding
+       - Never make partial changes - either update everything or nothing
 
-    3. EXECUTE CHANGES:
-       - Use update_code/delete_code/add_code with exact snippets
-       - Make complete, coherent changes - not partial fixes
-       - Verify changes match your intentions
+    3. EXECUTE CAREFULLY
+       When making changes:
+       - Make changes in a logical order (dependencies first)
+       - Use update_code() with exact matching to ensure precision
+       - Verify each change immediately after making it
+       - If a change fails, stop and explain why
+       - Never leave files in an inconsistent state
 
-    4. VERIFY CHANGES:
-       - Review the changes before applying
-       - Check for syntax errors or structural issues
-       - Verify all issues were addressed
+    4. VERIFY THOROUGHLY
+       After changes are made:
+       - verify_changes() to check pending changes
+       - Check that ALL related files are consistent
+       - Confirm that ALL references are updated
+       - Run any necessary validation
+       - Only apply_changes() when everything is verified
 
-    5. COMMUNICATE CLEARLY:
-       - Explain what you changed and why
-       - If you're unsure about something, say so
-       - If you need more information, ask for it
+    CRITICAL FUNCTIONS:
+    Multi-File Operations:
+    - search_across_files(query) -> ALWAYS use this first to find ALL instances
+    - find_references(symbol) -> ALWAYS use this to check dependencies
 
-    Remember: Think like a human programmer. Don't rush to make changes without understanding the full context.
+    Safe Code Changes:
+    - update_code(path, target, new_content) -> Use exact matching
+    - verify_changes() -> ALWAYS verify before applying
+    - apply_changes() -> Only after verification
+    - revert_changes() -> If anything goes wrong
+
+    Support Functions:
+    - read_file() -> For examining code
+    - list_dir() -> For understanding structure
+    - format_code() -> After changes
+    - lint_code() -> For validation
+
+    RULES:
+    1. ALWAYS search before changing
+    2. ALWAYS find all references
+    3. ALWAYS verify before applying
+    4. NEVER make partial updates
+    5. NEVER skip verification
+    6. STOP if verification fails
+
+    I handle these file types: Python, JavaScript/TypeScript, Go, Terraform, JSON/YAML.
+    I prioritize correctness over speed and will always explain my actions.
     """
+
+    def get_instructions(self) -> str:
+        """Return the plugin instructions for the agent runtime."""
+        return self.PLUGIN_INSTRUCTIONS
 
     def __init__(self, workspace_root: Optional[Path] = None):
         """
@@ -605,12 +663,20 @@ class CodeEditorV2Plugin:
         Raises:
             ValueError: If path is invalid or outside workspace root
         """
-        # Let ValueError propagate from _validate_path
-        file_path = self._validate_path(path)
-        if not file_path.is_file():
-            return f"Error: File '{path}' does not exist or is not a regular file."
-
         try:
+            logger.debug(f"Reading file: {path}")
+            logger.debug(f"Start line: {start_line}")
+            logger.debug(f"End line: {end_line}")
+
+            print_action(
+                f"Reading file {path} from lines {start_line} to {end_line}..."
+            )
+
+            # Let ValueError propagate from _validate_path
+            file_path = self._validate_path(path)
+            if not file_path.is_file():
+                return f"Error: File '{path}' does not exist or is not a regular file."
+
             with open(file_path, "r", encoding="utf-8") as f:
                 if start_line is None and end_line is None:
                     return f.read()
@@ -623,6 +689,7 @@ class CodeEditorV2Plugin:
         except UnicodeDecodeError:
             raise  # Let UnicodeDecodeError propagate for binary files
         except Exception as e:
+            logger.error(f"Error reading file {path}: {str(e)}")
             return f"Error reading file: {str(e)}"
 
     @kernel_function(description="Write content to a file (overwriting).")
@@ -984,17 +1051,25 @@ class CodeEditorV2Plugin:
             str: Result of the operation
         """
         try:
-            print_action(f"Updating code in {path}")
+            logger.debug(f"Updating code in {path}")
+            logger.debug(f"Target snippet: {target_snippet}")
+            logger.debug(f"New content: {new_content}")
+            logger.debug(f"Match type: {match_type}")
+
+            print_action("Preparing to update code")
+            print_file_header(path)
 
             # Stage the file in our Git repo
             file_path = Path(path)
             if not file_path.is_absolute():
                 file_path = self.workspace_root / file_path
             temp_path = self.git_editor._stage_file_for_edit(file_path)
+            print_subaction("File staged for editing")
 
             # Read current content
             with open(temp_path, "r", encoding="utf-8") as f:
                 file_content = f.read()
+            print_subaction("Current content loaded")
 
             # Create target snippet object
             target = self._create_snippet(
@@ -1013,11 +1088,17 @@ class CodeEditorV2Plugin:
             )
 
             if not match_result.matched:
+                print_result(
+                    f"Could not find matching code: {match_result.error_message}", False
+                )
                 return (
                     f"Error: Could not find matching code. {match_result.error_message}"
                 )
 
             if not match_result.context_matches:
+                print_subaction(
+                    f"{YELLOW}Warning: Found match but context differs significantly{RESET}"
+                )
                 logger.warning("Found match but context differs significantly")
 
             # Get the matched lines and their indentation
@@ -1092,25 +1173,19 @@ class CodeEditorV2Plugin:
             with open(temp_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
 
-            print_action(
-                f"Added update change for lines {match_result.start_line}-{match_result.end_line}"
+            print_result(
+                f"Updated code at lines {match_result.start_line}-{match_result.end_line} ({match_result.match_type} match)"
             )
-            logger.debug(
-                f"Queued update change in {path} "
-                f"(lines {match_result.start_line}-{match_result.end_line}, "
-                f"match_type={match_result.match_type})"
-            )
-
             return (
-                f"Successfully queued update:\n"
+                f"Successfully updated code:\n"
                 f"- File: {path}\n"
                 f"- Lines: {match_result.start_line}-{match_result.end_line}\n"
-                f"- Match type: {match_result.match_type}\n"
-                f"Use verify_changes() to review and apply_changes() to apply"
+                f"- Match type: {match_result.match_type}"
             )
 
         except Exception as e:
             logger.error(f"Error updating code in {path}: {str(e)}")
+            print_result(f"Error updating code: {str(e)}", False)
             return f"Error updating code: {str(e)}"
 
     @kernel_function(description="Delete code that matches a target snippet.")
@@ -1134,6 +1209,10 @@ class CodeEditorV2Plugin:
             str: Success message or error
         """
         try:
+            logger.debug(f"Preparing to delete code from {path}")
+            logger.debug(f"Target snippet: {target_snippet}")
+            logger.debug(f"Match type: {match_type}")
+
             print_action(f"Preparing to delete code from {path}")
 
             # Validate and read the file
@@ -1198,13 +1277,17 @@ class CodeEditorV2Plugin:
                 f"match_type={match_result.match_type})"
             )
 
-            return (
-                f"Successfully queued deletion:\n"
-                f"- File: {path}\n"
-                f"- Lines: {match_result.start_line}-{match_result.end_line}\n"
-                f"- Match type: {match_result.match_type}\n"
-                f"Use verify_changes() to review and apply_changes() to apply"
-            )
+            # Automatically apply changes
+            result = self.apply_changes()
+            if "Successfully applied changes" in result:
+                return (
+                    f"Successfully deleted code:\n"
+                    f"- File: {path}\n"
+                    f"- Lines: {match_result.start_line}-{match_result.end_line}\n"
+                    f"- Match type: {match_result.match_type}"
+                )
+            else:
+                return f"Error applying changes: {result}"
 
         except Exception as e:
             logger.error(f"Error deleting code from {path}: {str(e)}")
@@ -1215,8 +1298,8 @@ class CodeEditorV2Plugin:
         self,
         path: str,
         new_content: str,
-        position: Literal["before", "after"],
         target_snippet: str,
+        position: Literal["before", "after"] = "after",
         match_type: Literal["exact", "fuzzy"] = "exact",
         context_lines: int = 2,
     ) -> str:
@@ -1226,8 +1309,8 @@ class CodeEditorV2Plugin:
         Args:
             path (str): Path to the file to modify
             new_content (str): The new code to insert
-            position (str): Position to insert the code ('before' or 'after')
             target_snippet (str): The code snippet to find for insertion
+            position (str): Position to insert the code ('before' or 'after', defaults to 'after')
             match_type (str): Whether to use 'exact' or 'fuzzy' matching
             context_lines (int): Number of context lines to use for matching
 
@@ -1235,7 +1318,13 @@ class CodeEditorV2Plugin:
             str: Success message or error
         """
         try:
-            print_action(f"Preparing to insert code into {path}")
+            logger.debug(f"Inserting code in {path}")
+            logger.debug(f"Target snippet: {target_snippet}")
+            logger.debug(f"New content: {new_content}")
+            logger.debug(f"Position: {position}")
+            logger.debug(f"Match type: {match_type}")
+
+            print_action(f"Inserting code in {path}")
 
             # Validate and read the file
             file_path = self._validate_path(path)
@@ -1337,6 +1426,10 @@ class CodeEditorV2Plugin:
             str: Result of the search
         """
         try:
+            logger.debug(f"Searching for code snippets in {path}")
+            logger.debug(f"Query: {query}")
+            logger.debug(f"Match type: {match_type}")
+
             print_action(f"Searching for code snippets in {path}")
 
             # Validate and read the file
@@ -1427,39 +1520,35 @@ class CodeEditorV2Plugin:
     @kernel_function(description="Verify changes before applying them.")
     def verify_changes(self) -> str:
         """
-        Verify changes before applying them.
+        Verify pending changes before applying them.
 
         Returns:
             str: Result of the verification
         """
         try:
+            logger.debug("Verifying changes")
             print_action("Verifying changes before applying them")
 
-            # Verify each change
-            verification_results = []
-            for file_path, changes in self._pending_changes.items():
-                for change in changes:
-                    verification_results.append(
-                        f"Verifying change in {file_path}: {change.change_type} - {change.target_snippet.content}"
-                    )
-                    match_result = self._find_snippet_match(
-                        self.read_file(file_path),
-                        change.target_snippet,
-                        fuzzy=(change.change_type == ChangeType.UPDATE),
-                        context_lines=2,
-                    )
-                    verification_results.append(
-                        f"Verification result: {match_result.matched} - {match_result.error_message}"
-                    )
+            # Get the diff of staged changes
+            result = subprocess.run(
+                ["git", "diff", "--staged"],
+                cwd=self.git_editor.temp_dir,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
 
-            if all(result.matched for result in verification_results):
-                return "All changes verified successfully"
-            else:
-                return "Some changes failed verification"
+            logger.debug(f"Git diff output: {result.stdout}")
 
+            if not result.stdout:
+                logger.debug("No changes to verify")
+                return "No changes to verify"
+
+            return f"Changes verified:\n{result.stdout}"
         except Exception as e:
-            logger.error("Error verifying changes: {str(e)}")
-            return f"Error verifying changes: {str(e)}"
+            error_msg = f"Error verifying changes: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
 
     def _matches(
         self, target: CodeSnippet, candidate: CodeSnippet, fuzzy: bool = False
@@ -1503,6 +1592,7 @@ class CodeEditorV2Plugin:
             str: Result of the application
         """
         try:
+            logger.debug("Applying changes to files")
             print_action("Applying changes to files")
 
             # Group changes by file for atomic application
@@ -1583,6 +1673,10 @@ class CodeEditorV2Plugin:
             str: Search results with file paths and line numbers
         """
         try:
+            logger.debug(f"Searching for code across files matching '{file_pattern}'")
+            logger.debug(f"Query: {query}")
+            logger.debug(f"Case sensitive: {case_sensitive}")
+
             print_action(f"Searching for code across files matching '{file_pattern}'")
 
             # Find all matching files
@@ -1613,6 +1707,7 @@ class CodeEditorV2Plugin:
             return "\n".join(matches)
 
         except Exception as e:
+            logger.error(f"Error searching files: {str(e)}")
             return f"Error searching files: {str(e)}"
 
     @kernel_function(description="Find references to a symbol across files.")
@@ -1636,6 +1731,11 @@ class CodeEditorV2Plugin:
             str: Formatted reference results
         """
         try:
+            logger.debug(f"Finding references to '{symbol}'")
+            logger.debug(f"File pattern: {file_pattern}")
+            logger.debug(f"Context lines: {context_lines}")
+            logger.debug(f"Max results: {max_results}")
+
             print_action(f"Finding references to '{symbol}'")
 
             # Build a regex pattern that matches common symbol usage patterns
@@ -1741,6 +1841,13 @@ class CodeEditorV2Plugin:
             str: Formatted command output and status
         """
         try:
+            logger.debug(f"Executing command: {command}")
+            logger.debug(f"Working directory: {cwd}")
+            logger.debug(f"Timeout: {timeout}")
+            logger.debug(f"Environment variables: {env}")
+            logger.debug(f"Shell: {shell}")
+            logger.debug(f"Stream output: {stream_output}")
+
             print_action(f"Executing command: {command}")
 
             # Validate working directory
@@ -1865,6 +1972,9 @@ class CodeEditorV2Plugin:
             str: Result of the revert operation
         """
         try:
+            logger.debug(f"Reverting changes for {path}")
+            logger.debug(f"Number of changes: {num_changes}")
+
             print_action(f"Reverting changes for {path}")
 
             # Use Git to revert changes
@@ -1888,6 +1998,185 @@ class CodeEditorV2Plugin:
             str: Git log with patches
         """
         try:
+            logger.debug(f"Getting change history for {path}")
             return self.git_editor.get_change_history(path)
         except Exception as e:
+            logger.error(f"Error getting change history: {str(e)}")
             return f"Error getting change history: {str(e)}"
+
+    @kernel_function(
+        description="Lint code in a file using language-appropriate linters."
+    )
+    def lint_code(
+        self,
+        path: str,
+        fix: bool = False,
+    ) -> str:
+        """
+        Lint code in a file using language-appropriate linters.
+
+        Args:
+            path (str): Path to the file to lint
+            fix: Whether to attempt to fix linting issues automatically
+
+        Returns:
+            str: Linting results or error message
+        """
+        try:
+            logger.debug(f"Linting file: {path}")
+            logger.debug(f"Fix: {fix}")
+
+            print_action(f"Linting file: {path}")
+
+            # Validate and get file path
+            file_path = self._validate_path(path)
+            if not file_path.is_file():
+                return f"Error: File '{path}' does not exist or is not a regular file."
+
+            # Detect language from file extension
+            ext = file_path.suffix.lower()
+
+            # Map of extensions to linting commands
+            lint_commands = {
+                ".py": {
+                    "cmd": ["flake8", str(file_path)],
+                    "fix_cmd": ["black", str(file_path)] if fix else None,
+                },
+                ".js": {
+                    "cmd": ["eslint", str(file_path)],
+                    "fix_cmd": ["eslint", "--fix", str(file_path)] if fix else None,
+                },
+                ".go": {
+                    "cmd": ["golint", str(file_path)],
+                    "fix_cmd": ["gofmt", "-w", str(file_path)] if fix else None,
+                },
+                ".json": {
+                    "cmd": ["jsonlint", str(file_path)],
+                    "fix_cmd": None,  # No auto-fix for JSON
+                },
+                ".yaml": {
+                    "cmd": ["yamllint", str(file_path)],
+                    "fix_cmd": None,  # No auto-fix for YAML
+                },
+                ".yml": {
+                    "cmd": ["yamllint", str(file_path)],
+                    "fix_cmd": None,  # No auto-fix for YAML
+                },
+                ".tf": {
+                    "cmd": ["tflint", "--format=compact", str(file_path)],
+                    "fix_cmd": ["terraform", "fmt", str(file_path)] if fix else None,
+                },
+                ".tfvars": {
+                    "cmd": ["tflint", "--format=compact", str(file_path)],
+                    "fix_cmd": ["terraform", "fmt", str(file_path)] if fix else None,
+                },
+            }
+
+            if ext not in lint_commands:
+                return f"Error: No linter configured for files with extension '{ext}'"
+
+            commands = lint_commands[ext]
+            results = []
+
+            # Run the linter
+            try:
+                result = subprocess.run(
+                    commands["cmd"],
+                    capture_output=True,
+                    text=True,
+                    check=False,  # Don't raise on linting errors
+                )
+
+                if result.returncode == 0:
+                    results.append("No linting issues found.")
+                else:
+                    results.append("Linting issues found:")
+                    results.append(result.stdout.strip() or result.stderr.strip())
+
+                    # If fix is requested and a fix command exists
+                    if fix and commands["fix_cmd"]:
+                        results.append("\nAttempting to fix issues...")
+                        fix_result = subprocess.run(
+                            commands["fix_cmd"],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+
+                        if fix_result.returncode == 0:
+                            results.append("Successfully fixed linting issues.")
+                        else:
+                            results.append("Failed to fix some issues:")
+                            results.append(
+                                fix_result.stdout.strip() or fix_result.stderr.strip()
+                            )
+
+            except FileNotFoundError:
+                return f"Error: Required linting tools not found for {ext} files."
+            except Exception as e:
+                return f"Error running linter: {str(e)}"
+
+            return "\n".join(results)
+
+        except Exception as e:
+            logger.error(f"Error linting file {path}: {str(e)}")
+            return f"Error linting file: {str(e)}"
+
+    @kernel_function(
+        description="Format code in a file using language-appropriate formatters."
+    )
+    def format_code(
+        self,
+        path: str,
+    ) -> str:
+        """
+        Format code in a file using language-appropriate formatters.
+
+        Args:
+            path: Path to the file to format
+
+        Returns:
+            str: Status message indicating formatting results
+        """
+        print_action(f"Formatting file: {path}...")
+        file_path = self._validate_path(path)
+        if not file_path.exists():
+            return f"Error: File not found: {file_path}"
+
+        # Map of extensions to formatting commands
+        format_commands = {
+            ".py": ["black", str(file_path)],
+            ".js": ["prettier", "--write", str(file_path)],
+            ".ts": ["prettier", "--write", str(file_path)],
+            ".go": ["gofmt", "-w", str(file_path)],
+            ".tf": ["terraform", "fmt", str(file_path)],
+            ".tfvars": ["terraform", "fmt", str(file_path)],
+            ".json": ["prettier", "--write", str(file_path)],
+            ".yaml": ["prettier", "--write", str(file_path)],
+            ".yml": ["prettier", "--write", str(file_path)],
+        }
+
+        # Get the file extension
+        ext = file_path.suffix.lower()
+        if ext not in format_commands:
+            return f"Error: Unsupported file type: {ext}"
+
+        # Run the formatter
+        try:
+            cmd = format_commands[ext]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            if result.returncode == 0:
+                return f"Successfully formatted {file_path}"
+            else:
+                error_msg = result.stderr.strip() or result.stdout.strip()
+                return f"Error formatting {file_path}: {error_msg}"
+        except FileNotFoundError:
+            return f"Error: Required formatter not found for {ext} files"
+        except Exception as e:
+            return f"Error formatting {file_path}: {str(e)}"

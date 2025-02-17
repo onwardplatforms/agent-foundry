@@ -112,8 +112,12 @@ class SchemaValidator:
                 return
             var_name = parts[1]
             if var_name not in self.defined_vars:
+                available = (
+                    ", ".join(sorted(self.defined_vars.keys())) or "none defined"
+                )
                 errors.append(
-                    f"Reference to undefined variable 'var.{var_name}' at {path}"
+                    f"Reference to undefined variable 'var.{var_name}' at {path}\n"
+                    f"  Available variables: {available}"
                 )
                 return
             # For nested references, validate against the variable's structure
@@ -132,8 +136,12 @@ class SchemaValidator:
                 return
             model_name = parts[1]
             if model_name not in self.defined_models:
+                available = (
+                    ", ".join(sorted(self.defined_models.keys())) or "none defined"
+                )
                 errors.append(
-                    f"Reference to undefined model 'model.{model_name}' at {path}"
+                    f"Reference to undefined model 'model.{model_name}' at {path}\n"
+                    f"  Available models: {available}"
                 )
                 return
             # For nested references, validate against the model's structure
@@ -152,8 +160,12 @@ class SchemaValidator:
                 return
             plugin_key = f"{parts[1]}:{parts[2]}"
             if plugin_key not in self.defined_plugins:
+                available = (
+                    ", ".join(sorted(self.defined_plugins.keys())) or "none defined"
+                )
                 errors.append(
-                    f"Reference to undefined plugin 'plugin.{parts[1]}.{parts[2]}' at {path}"
+                    f"Reference to undefined plugin 'plugin.{parts[1]}.{parts[2]}' at {path}\n"
+                    f"  Available plugins: {available}"
                 )
                 return
             # For nested references, validate against the plugin's structure
@@ -172,8 +184,12 @@ class SchemaValidator:
                 return
             agent_name = parts[1]
             if agent_name not in self.defined_agents:
+                available = (
+                    ", ".join(sorted(self.defined_agents.keys())) or "none defined"
+                )
                 errors.append(
-                    f"Reference to undefined agent 'agent.{agent_name}' at {path}"
+                    f"Reference to undefined agent 'agent.{agent_name}' at {path}\n"
+                    f"  Available agents: {available}"
                 )
                 return
             # For nested references, validate against the agent's structure
@@ -666,32 +682,46 @@ class HCLConfigLoader:
 
     def _load_and_validate_files(self) -> List[Dict[str, Any]]:
         """
-        Find all *.hcl, parse them with hcl2, run schema validation,
-        return list of raw configs if no errors. Otherwise raise an error.
+        Find all *.hcl files, parse them with hcl2, merge them, then validate the merged config.
+        Returns list of raw configs if no errors. Otherwise raise an error.
         """
         hcl_files = list(self.config_dir.glob("*.hcl"))
         logger.debug("Found HCL files: %s", hcl_files)
 
+        # First load all files without validation
         raw_configs: List[Dict[str, Any]] = []
-        errors: List[str] = []
+        parse_errors: List[str] = []
 
         for f in hcl_files:
-            with open(f, "r") as fp:
-                logger.debug("Loading HCL file: %s", f)
-                rc = hcl2.load(fp)
-            # Validate
-            file_errors = self.validator.validate(rc)
-            if file_errors:
-                for e in file_errors:
-                    errors.append(f"In file {f.name}: {e}")
-            else:
-                raw_configs.append(rc)
+            try:
+                with open(f, "r") as fp:
+                    logger.debug("Loading HCL file: %s", f)
+                    rc = hcl2.load(fp)
+                    raw_configs.append(rc)
+            except Exception as e:
+                parse_errors.append(f"Error parsing {f.name}: {str(e)}")
 
-        if errors:
-            msg = "Configuration validation failed:\n" + "\n".join(errors)
+        if parse_errors:
+            msg = "HCL parsing failed:\n" + "\n".join(parse_errors)
             raise RuntimeError(msg)
 
-        return raw_configs
+        # Merge all configs into one
+        merged_config: Dict[str, Any] = {}
+        for key in ["runtime", "variable", "model", "plugin", "agent"]:
+            merged_config[key] = []
+
+        for rc in raw_configs:
+            for key in merged_config:
+                if key in rc:
+                    merged_config[key].extend(rc[key])
+
+        # Now validate the merged config
+        validation_errors = self.validator.validate(merged_config)
+        if validation_errors:
+            msg = "Configuration validation failed:\n" + "\n".join(validation_errors)
+            raise RuntimeError(msg)
+
+        return [merged_config]  # Return merged config as single item
 
 
 ##############################################################################

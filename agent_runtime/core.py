@@ -155,31 +155,21 @@ def init_plugins(config_dir: Path, agent_name: Optional[str] = None) -> None:
     for pc in plugin_list:
         pm.plugin_configs[pc.scoped_name] = pc
 
-    # Always create a new lockfile with just the current plugins
+    # Create a new lockfile with just the current plugins
     logger.debug(
         "Creating new lockfile with plugins: %s", [p.scoped_name for p in plugin_list]
     )
     new_data = {"plugins": []}
     if plugin_list:
         new_data = pm.create_lock_data()
-    pm.write_lockfile(config_dir / "plugins.lock.json", new_data)
 
     if not plugin_list:
-        click.echo(Style.info("No plugins found. Lockfile cleaned."))
+        click.echo(Style.info("No plugins found. Lockfile cleaned"))
+        pm.write_lockfile(config_dir / "plugins.lock.json", new_data)
         return
 
-    # Now check if we need to install anything
-    if pm.compare_with_lock(plugin_list):
-        click.echo(Style.success("All plugins are up to date."))
-        # Load from local cache
-        for cfg_item in plugin_list:
-            git_ref = cfg_item.git_ref if cfg_item.is_github_source else None
-            pm.load_plugin(cfg_item.scoped_name, git_ref)
-        click.echo(Style.success("All plugins loaded from local cache."))
-        return
-
+    # Install and load plugins
     pm.install_and_load_plugins(plugin_list, force_reinstall=False)
-    click.echo(Style.success("Plugins installed successfully."))
 
 
 def run_agent_interactive(

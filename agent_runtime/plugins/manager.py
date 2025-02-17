@@ -6,7 +6,6 @@ import importlib
 import json
 import logging
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -14,29 +13,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
 import requests
-from semantic_kernel import Kernel
 import click
 from agent_runtime.cli.output import Style
-
-
-# ANSI color codes for terminal output
-class Colors:
-    """Terminal color codes."""
-
-    GREEN = "\033[32m"
-    YELLOW = "\033[33m"
-    BLUE = "\033[36m"
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-
-
-def cli_message(msg: str, color: str = "", bold: bool = False) -> None:
-    """Print a CLI message with optional color and formatting."""
-    if os.getenv("NO_COLOR"):  # Respect NO_COLOR env var
-        print(msg)
-    else:
-        bold_code = Colors.BOLD if bold else ""
-        print(f"{bold_code}{color}{msg}{Colors.RESET}")
 
 
 class PluginNotFoundError(Exception):
@@ -336,7 +314,9 @@ class PluginManager:
                 shutil.rmtree(version_dir)
             raise RuntimeError(f"Failed to clone plugin: {e.stderr}") from e
 
-    def install_plugin(self, cfg: PluginConfig, force_reinstall: bool = False) -> None:
+    def install_plugin(
+        self, cfg: PluginConfig, force_reinstall: bool = False, quiet: bool = False
+    ) -> None:
         """Install a single plugin (download/copy) if needed."""
         self.logger.debug(
             "Processing plugin '%s' from '%s'. (force=%s)",
@@ -369,13 +349,19 @@ class PluginManager:
                                 locked_sha == current_sha
                                 and plugin.get("version") == cfg.version
                             ):
-                                click.echo(Style.plugin_status(cfg.name, "up to date"))
+                                if not quiet:
+                                    click.echo(
+                                        Style.plugin_status(cfg.name, "up to date")
+                                    )
                                 self._set_plugin_vars(cfg)
                                 return
                             else:
-                                click.echo(
-                                    Style.plugin_status(cfg.name, "updating", "yellow")
-                                )
+                                if not quiet:
+                                    click.echo(
+                                        Style.plugin_status(
+                                            cfg.name, "updating", "yellow"
+                                        )
+                                    )
                                 break
 
             # If we get here, we need to clone/re-clone
@@ -406,13 +392,15 @@ class PluginManager:
                         )
 
                         if locked_sha == current_sha:
-                            click.echo(Style.plugin_status(cfg.name, "up to date"))
+                            if not quiet:
+                                click.echo(Style.plugin_status(cfg.name, "up to date"))
                             self._set_plugin_vars(cfg)
                             return
                         else:
-                            click.echo(
-                                Style.plugin_status(cfg.name, "updating", "yellow")
-                            )
+                            if not quiet:
+                                click.echo(
+                                    Style.plugin_status(cfg.name, "updating", "yellow")
+                                )
 
             # Add source directory's parent to sys.path if not already there
             parent_dir = str(src_path.parent.resolve())
@@ -569,6 +557,79 @@ class PluginManager:
         )
         return self.kernel.add_plugin(instance, plugin_name=sanitized_name)
 
+    def compare_with_lock(
+        self, plugins: List[PluginConfig], lock_data: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Compare current plugins with the global lockfile and return detailed changes."""
+        changes = {"added": [], "removed": [], "updated": []}
+
+        if lock_data is None:
+            lock_path = self.base_dir / "plugins.lock.json"
+            if not lock_path.exists():
+                self.logger.debug("No lockfile found at %s", lock_path)
+                # Mark all plugins as added
+                changes["added"] = [{"name": p.scoped_name} for p in plugins]
+                return changes
+            lock_data = self.read_lockfile(lock_path)
+
+        self.logger.debug("Comparing plugins with lock data: %s", lock_data)
+        current_scoped_names = set(p.scoped_name for p in plugins)
+        self.logger.debug("Current plugins: %s", current_scoped_names)
+
+        locked_map = {p["scoped_name"]: p for p in lock_data.get("plugins", [])}
+        locked_scoped_names = set(locked_map.keys())
+        self.logger.debug("Locked plugins: %s", list(locked_scoped_names))
+
+        # Check for added plugins
+        added_plugins = current_scoped_names - locked_scoped_names
+        changes["added"].extend([{"name": name} for name in added_plugins])
+
+        # Check for removed plugins
+        removed_plugins = locked_scoped_names - current_scoped_names
+        changes["removed"].extend([{"name": name} for name in removed_plugins])
+
+        # Check for updated plugins
+        for cfg in plugins:
+            if cfg.scoped_name not in locked_map:
+                continue
+
+            locked = locked_map[cfg.scoped_name]
+            update_info = {"name": cfg.scoped_name, "changes": []}
+
+            if cfg.is_github_source:
+                if cfg.version != locked.get("version"):
+                    update_info["changes"].append(
+                        {
+                            "type": "version",
+                            "old": locked.get("version"),
+                            "new": cfg.version,
+                        }
+                    )
+
+                current_sha = cfg.get_github_commit_sha()
+                if current_sha and current_sha != locked.get("commit_sha"):
+                    update_info["changes"].append(
+                        {
+                            "type": "commit",
+                            "old": locked.get("commit_sha"),
+                            "new": current_sha,
+                        }
+                    )
+            else:
+                src_path = cfg.get_install_dir(self.plugins_dir, self.base_dir)
+                if src_path.exists():
+                    current_sha = self._compute_directory_sha(src_path)
+                    locked_sha = locked.get("sha")
+                    if current_sha != locked_sha:
+                        update_info["changes"].append(
+                            {"type": "sha", "old": locked_sha, "new": current_sha}
+                        )
+
+            if update_info["changes"]:
+                changes["updated"].append(update_info)
+
+        return changes
+
     def install_and_load_plugins(
         self, configs: List[PluginConfig], force_reinstall: bool = False
     ) -> None:
@@ -582,31 +643,165 @@ class PluginManager:
         for cfg in configs:
             self.plugin_configs[cfg.scoped_name] = cfg
 
-        if not force_reinstall and self.compare_with_lock(configs):
-            self.logger.debug("All plugins are up to date.")
-            # Still need to load them
-            for cfg in configs:
-                self.load_plugin(
-                    cfg.scoped_name, cfg.version if cfg.is_github_source else None
+        if not force_reinstall:
+            changes = self.compare_with_lock(configs)
+            if not any(changes.values()):  # No changes detected
+                self.logger.debug("All plugins are up to date.")
+                # Still need to load them
+                for cfg in configs:
+                    self.load_plugin(
+                        cfg.scoped_name, cfg.version if cfg.is_github_source else None
+                    )
+                click.echo(Style.header("Initializing agent configuration..."))
+                click.echo("")
+                click.echo(Style.success("All plugins are up to date"))
+                click.echo(Style.success("All plugins loaded from local cache"))
+                click.echo(
+                    Style.success(
+                        "Agent configuration has been successfully initialized"
+                    )
                 )
-            click.echo(Style.success("All plugins are up to date"))
-            return
+                click.echo("")
+                click.echo(
+                    "You may now begin working with your agent. All commands should work."
+                )
+                click.echo(
+                    "\nIf you ever change plugins or their configuration, rerun the init"
+                )
+                click.echo(
+                    "command to reinitialize your working directory. If you forget, other"
+                )
+                click.echo(
+                    "commands will detect it and remind you to do so if necessary."
+                )
+                return
 
-        click.echo(Style.header("\nInitializing plugins..."))
+            # Track plugins we've already reported on to avoid duplicates
+            reported_plugins = set()
 
-        # Separate local/remote
+            # Separate configs by type
+            local_configs = [c for c in configs if c.is_local_source]
+            remote_configs = [c for c in configs if c.is_github_source]
+
+            # Display initialization header
+            click.echo(Style.header("Initializing agent configuration..."))
+            click.echo("")
+
+            # Display local plugins section if there are any local plugins
+            if local_configs:
+                click.echo("- Local plugins:")
+
+                # Process all local plugins
+                for cfg in local_configs:
+                    if cfg.scoped_name in reported_plugins:
+                        continue
+                    reported_plugins.add(cfg.scoped_name)
+
+                    # Check if this plugin has updates
+                    update_info = next(
+                        (p for p in changes["updated"] if p["name"] == cfg.scoped_name),
+                        None,
+                    )
+
+                    if update_info:
+                        changes_desc = []
+                        for change in update_info["changes"]:
+                            if change["type"] == "sha":
+                                changes_desc.append("local changes detected")
+                        click.echo(
+                            Style.plugin_status(
+                                cfg.scoped_name,
+                                f"updating ({', '.join(changes_desc)})",
+                                "yellow",
+                            )
+                        )
+                    else:
+                        click.echo(Style.plugin_status(cfg.scoped_name, "up to date"))
+
+            # Display remote plugins section if there are any remote plugins
+            if remote_configs:
+                if local_configs:  # Add a newline if we had local plugins
+                    click.echo("")
+                click.echo("- Remote plugins:")
+
+                # Process all remote plugins
+                for cfg in remote_configs:
+                    if cfg.scoped_name in reported_plugins:
+                        continue
+                    reported_plugins.add(cfg.scoped_name)
+
+                    # Check if this plugin has updates
+                    update_info = next(
+                        (p for p in changes["updated"] if p["name"] == cfg.scoped_name),
+                        None,
+                    )
+
+                    if update_info:
+                        changes_desc = []
+                        for change in update_info["changes"]:
+                            if change["type"] == "version":
+                                changes_desc.append(
+                                    f"version {change['old']} → {change['new']}"
+                                )
+                            elif change["type"] == "commit":
+                                old_commit = (
+                                    change["old"][:7] if change["old"] else "none"
+                                )
+                                new_commit = (
+                                    change["new"][:7] if change["new"] else "none"
+                                )
+                                changes_desc.append(
+                                    f"commit {old_commit} → {new_commit}"
+                                )
+                        click.echo(
+                            Style.plugin_status(
+                                cfg.scoped_name,
+                                f"updating ({', '.join(changes_desc)})",
+                                "yellow",
+                            )
+                        )
+                    else:
+                        click.echo(Style.plugin_status(cfg.scoped_name, "up to date"))
+
+            # Display any new plugins that weren't covered above
+            if changes["added"]:
+                if (
+                    local_configs or remote_configs
+                ):  # Add a newline if we had other sections
+                    click.echo("")
+                click.echo("- Installing new plugins:")
+                for plugin in changes["added"]:
+                    if plugin["name"] in reported_plugins:
+                        continue
+                    reported_plugins.add(plugin["name"])
+                    click.echo(
+                        Style.plugin_status(plugin["name"], "installing", "blue")
+                    )
+
+            # Display any removed plugins
+            if changes["removed"]:
+                if (
+                    local_configs or remote_configs or changes["added"]
+                ):  # Add a newline if we had other sections
+                    click.echo("")
+                click.echo("- Removing plugins:")
+                for plugin in changes["removed"]:
+                    if plugin["name"] in reported_plugins:
+                        continue
+                    reported_plugins.add(plugin["name"])
+                    click.echo(Style.plugin_status(plugin["name"], "removing", "red"))
+
+        # Install plugins
         local_configs = [c for c in configs if c.is_local_source]
         remote_configs = [c for c in configs if c.is_github_source]
 
         if local_configs:
-            click.echo(Style.info("\nLocal plugins:"))
             for cfg in local_configs:
-                self.install_plugin(cfg, force_reinstall)
+                self.install_plugin(cfg, force_reinstall, quiet=True)
 
         if remote_configs:
-            click.echo(Style.info("\nRemote plugins:"))
             for cfg in remote_configs:
-                self.install_plugin(cfg, force_reinstall)
+                self.install_plugin(cfg, force_reinstall, quiet=True)
 
         # Load them all
         for cfg in configs:
@@ -618,7 +813,23 @@ class PluginManager:
         new_data = self.create_lock_data()
         self.write_lockfile(self.base_dir / "plugins.lock.json", new_data)
         self.logger.debug("Lockfile updated: %s", "plugins.lock.json")
-        click.echo(Style.success("\nInitialization complete"))
+
+        # Final success message
+        click.echo("")
+        click.echo(
+            Style.success("Agent configuration has been successfully initialized")
+        )
+        click.echo("")
+        click.echo(
+            "You may now begin working with your agent. All commands should work."
+        )
+        click.echo(
+            "\nIf you ever change plugins or their configuration, rerun the init"
+        )
+        click.echo(
+            "command to reinitialize your working directory. If you forget, other"
+        )
+        click.echo("commands will detect it and remind you to do so if necessary.")
 
     def create_lock_data(self) -> Dict[str, Any]:
         """Create lock data for all installed plugins."""
@@ -649,104 +860,6 @@ class PluginManager:
             plugins_data.append(plugin_data)
 
         return {"plugins": plugins_data}
-
-    def compare_with_lock(
-        self, plugins: List[PluginConfig], lock_data: Optional[Dict[str, Any]] = None
-    ) -> bool:
-        """Compare current plugins with the global lockfile."""
-        if lock_data is None:
-            lock_path = self.base_dir / "plugins.lock.json"
-            if not lock_path.exists():
-                self.logger.debug("No lockfile found at %s", lock_path)
-                return False
-            lock_data = self.read_lockfile(lock_path)
-
-        self.logger.debug("Comparing plugins with lock data: %s", lock_data)
-        current_scoped_names = set(p.scoped_name for p in plugins)
-        self.logger.debug("Current plugins: %s", current_scoped_names)
-
-        locked_map = {p["scoped_name"]: p for p in lock_data.get("plugins", [])}
-        locked_scoped_names = set(locked_map.keys())
-        self.logger.debug("Locked plugins: %s", list(locked_scoped_names))
-
-        # Check for plugins that are not in the lockfile
-        missing_plugins = current_scoped_names - locked_scoped_names
-        if missing_plugins:
-            self.logger.debug("Plugins missing from lockfile: %s", missing_plugins)
-            return False
-
-        # For each plugin we care about, check source and type
-        for cfg in plugins:
-            if cfg.scoped_name not in locked_map:
-                self.logger.debug("Plugin '%s' not in lockfile", cfg.scoped_name)
-                return False
-
-            locked = locked_map[cfg.scoped_name]
-
-            # Compare source and type
-            if cfg.source != locked["source"]:
-                self.logger.debug(
-                    "Source mismatch for '%s': current=%s, locked=%s",
-                    cfg.scoped_name,
-                    cfg.source,
-                    locked["source"],
-                )
-                return False
-
-            if (cfg.is_github_source and locked["type"] != "remote") or (
-                not cfg.is_github_source and locked["type"] != "local"
-            ):
-                self.logger.debug(
-                    "Type mismatch for '%s': expected=%s, got=%s",
-                    cfg.scoped_name,
-                    "remote" if cfg.is_github_source else "local",
-                    locked["type"],
-                )
-                return False
-
-            if cfg.is_github_source:
-                if cfg.version != locked.get("version"):
-                    self.logger.debug(
-                        "Version mismatch for '%s': current=%s, locked=%s",
-                        cfg.scoped_name,
-                        cfg.version,
-                        locked.get("version"),
-                    )
-                    return False
-
-                current_sha = cfg.get_github_commit_sha()
-                if not current_sha:
-                    self.logger.debug(
-                        "Could not get commit SHA for '%s'", cfg.scoped_name
-                    )
-                    return False
-
-                if current_sha != locked.get("commit_sha"):
-                    self.logger.debug(
-                        "Commit SHA mismatch for '%s': current=%s, locked=%s",
-                        cfg.scoped_name,
-                        current_sha,
-                        locked.get("commit_sha"),
-                    )
-                    return False
-            else:
-                src_path = cfg.get_install_dir(self.plugins_dir, self.base_dir)
-                if not src_path.exists():
-                    self.logger.debug("Local plugin path does not exist: %s", src_path)
-                    return False
-
-                current_sha = self._compute_directory_sha(src_path)
-                locked_sha = locked.get("sha")
-                if current_sha != locked_sha:
-                    self.logger.debug(
-                        "SHA mismatch for '%s': current=%s, locked=%s",
-                        cfg.scoped_name,
-                        current_sha,
-                        locked_sha,
-                    )
-                    return False
-
-        return True
 
     def _compute_directory_sha(self, directory: Path) -> str:
         """Compute SHA256 hash of a directory's contents."""
