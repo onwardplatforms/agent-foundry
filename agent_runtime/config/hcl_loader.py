@@ -223,6 +223,13 @@ class SchemaValidator:
                 errors.append(f"In {path}: Unknown attribute or block '{key}'")
                 continue
 
+            # If it's an attribute, validate it
+            if key in valid_attributes:
+                attr_errors = self._validate_attribute(
+                    value, schema["attributes"][key], f"{path}.{key}"
+                )
+                errors.extend(attr_errors)
+
             # If it's a block type, validate its content against the block schema
             if key in valid_block_types:
                 block_schema = schema["block_types"][key]
@@ -235,12 +242,52 @@ class SchemaValidator:
                     )
                     continue
 
+                block_count = len(value)
+
                 # For "single" nesting mode, we should only have one item
-                if nesting_mode == "single" and len(value) > 1:
+                if nesting_mode == "single" and block_count > 1:
                     errors.append(
                         f"In {path}.{key}: Multiple nested blocks not allowed (nesting_mode=single)"
                     )
                     continue
+
+                # Apply all validation rules if present
+                if "validation" in block_schema:
+                    for rule in block_schema["validation"]:
+                        if "range" in rule:
+                            range_spec = rule["range"]
+
+                            # Check minimum if specified
+                            if "min" in range_spec:
+                                min_val = int(range_spec["min"])
+                                if block_count < min_val:
+                                    error_msg = rule.get(
+                                        "error_message",
+                                        f"Expected at least {min_val} blocks, got {block_count}",
+                                    )
+                                    errors.append(f"In {path}.{key}: {error_msg}")
+
+                            # Check maximum if specified
+                            if "max" in range_spec:
+                                max_val = int(range_spec["max"])
+                                if block_count > max_val:
+                                    error_msg = rule.get(
+                                        "error_message",
+                                        f"Expected at most {max_val} blocks, got {block_count}",
+                                    )
+                                    errors.append(f"In {path}.{key}: {error_msg}")
+                                    continue
+
+                            # Check maximum exclusive if specified
+                            if "maxe" in range_spec:
+                                maxe_val = int(range_spec["maxe"])
+                                if block_count >= maxe_val:
+                                    error_msg = rule.get(
+                                        "error_message",
+                                        f"Expected fewer than {maxe_val} blocks, got {block_count}",
+                                    )
+                                    errors.append(f"In {path}.{key}: {error_msg}")
+                                    continue
 
                 # Validate each block in the list
                 for i, block in enumerate(value):
@@ -262,12 +309,6 @@ class SchemaValidator:
                     errors.append(
                         f"In {path}: Missing required attribute '{attr_name}'"
                     )
-                elif attr_name in content:
-                    attr_value = content[attr_name]
-                    attr_errors = self._validate_attribute(
-                        attr_value, attr_schema, f"{path}.{attr_name}"
-                    )
-                    errors.extend(attr_errors)
 
         return errors
 
@@ -297,29 +338,68 @@ class SchemaValidator:
             if not isinstance(value, str):
                 errors.append(f"In {path}: Expected string, got {type(value).__name__}")
             else:
-                # pattern
-                if "pattern" in schema:
-                    pattern = re.compile(schema["pattern"])
-                    if not pattern.match(value):
-                        errors.append(
-                            f"In {path}: Value '{value}' does not match pattern {schema['pattern']}"
-                        )
-                # options
-                if "options" in schema and value not in schema["options"]:
-                    errors.append(
-                        f"In {path}: Value '{value}' must be one of: {', '.join(schema['options'])}"
-                    )
+                # Apply all validation rules if present
+                if "validation" in schema:
+                    for rule in schema["validation"]:
+                        # pattern validation
+                        if "pattern" in rule:
+                            pattern = re.compile(rule["pattern"])
+                            if not pattern.match(value):
+                                error_msg = rule.get(
+                                    "error_message",
+                                    f"Value '{value}' does not match pattern {rule['pattern']}",
+                                )
+                                errors.append(f"In {path}: {error_msg}")
+
+                        # options validation
+                        if "options" in rule:
+                            if value not in rule["options"]:
+                                error_msg = rule.get(
+                                    "error_message",
+                                    f"Value '{value}' must be one of: {', '.join(rule['options'])}",
+                                )
+                                errors.append(f"In {path}: {error_msg}")
 
         elif attr_type == "number":
             if not isinstance(value, (int, float)):
                 errors.append(f"In {path}: Expected number, got {type(value).__name__}")
             else:
-                if "constraints" in schema:
-                    c = schema["constraints"]
-                    if "min" in c and value < c["min"]:
-                        errors.append(f"In {path}: Value {value} must be >= {c['min']}")
-                    if "max" in c and value > c["max"]:
-                        errors.append(f"In {path}: Value {value} must be <= {c['max']}")
+                # Apply all validation rules if present
+                if "validation" in schema:
+                    value = float(value)  # Convert to float for comparison
+                    for rule in schema["validation"]:
+                        if "range" in rule:
+                            range_spec = rule["range"]
+
+                            # Check minimum if specified
+                            if "min" in range_spec:
+                                min_val = float(range_spec["min"])
+                                if value < min_val:
+                                    error_msg = rule.get(
+                                        "error_message",
+                                        f"Value {value} must be greater than or equal to {min_val}",
+                                    )
+                                    errors.append(f"In {path}: {error_msg}")
+
+                            # Check maximum if specified
+                            if "max" in range_spec:
+                                max_val = float(range_spec["max"])
+                                if value > max_val:
+                                    error_msg = rule.get(
+                                        "error_message",
+                                        f"Value {value} must be less than or equal to {max_val}",
+                                    )
+                                    errors.append(f"In {path}: {error_msg}")
+
+                            # Check maximum exclusive if specified
+                            if "maxe" in range_spec:
+                                maxe_val = float(range_spec["maxe"])
+                                if value >= maxe_val:
+                                    error_msg = rule.get(
+                                        "error_message",
+                                        f"Value {value} must be less than {maxe_val}",
+                                    )
+                                    errors.append(f"In {path}: {error_msg}")
 
         elif attr_type == "bool":
             if not isinstance(value, bool):

@@ -11,8 +11,4 @@ model "gpt4o" {
 model "llama3" {
   provider = "ollama"
   name     = "llama3.2:latest"
-  settings {
-    temperature = 0.5
-    fake = "fake"
-  }
 }
