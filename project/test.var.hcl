@@ -1,9 +1,52 @@
-model_temperature = 0.4
-debug_mode = true
-allowed_models = ["gpt-4", "gpt-3.5-turbo"]
-model_settings = {
-  context_window = 16385
-  top_p = 0.95
+signature = "From Var File"
+
+variable "base_signature" {
+  type = string
+  default = "Base Signature"
 }
-model_provider = "openai"
-model_name = "gpt-4o"
+
+variable "nested_signature" {
+  type = string
+  default = "${var.base_signature} - Nested"
+}
+
+variable "map_var" {
+  type = map
+  default = {
+    key1 = "${var.base_signature} - Map1"
+    key2 = "${var.nested_signature} - Map2"
+  }
+}
+
+variable "list_var" {
+  type = list
+  default = [
+    "${var.base_signature} - List1",
+    "${var.nested_signature} - List2"
+  ]
+}
+
+variable "plugin_settings" {
+  type = map
+  default = {
+    signature = "${var.nested_signature}"
+    extra_setting = "test"
+  }
+}
+
+# Test type constraints
+variable "number_var" {
+  type = number
+  default = 42
+}
+
+variable "bool_var" {
+  type = bool
+  default = true
+}
+
+# Test required variables
+variable "required_var" {
+  type = string
+  description = "This variable must be set"
+}

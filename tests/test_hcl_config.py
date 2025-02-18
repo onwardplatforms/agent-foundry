@@ -1,7 +1,7 @@
 import os
 import pytest
 import logging
-from agent_runtime.config.hcl_loader import HCLConfigLoader
+from agent_runtime.schema.loader import ConfigLoader
 
 # Configure logging for tests
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ agent "local" {
 def test_load_local_agent(config_dir):
     """Test loading local agent configuration"""
     logger.info("Starting test_load_local_agent")
-    loader = HCLConfigLoader(str(config_dir))
+    loader = ConfigLoader(str(config_dir))
     agents = loader.load_config()
     logger.debug("Loaded agents configuration: %s", agents)
 
@@ -112,7 +112,7 @@ def test_load_local_agent(config_dir):
 def test_variable_interpolation(config_dir):
     """Test variable interpolation in model settings"""
     logger.info("Starting test_variable_interpolation")
-    loader = HCLConfigLoader(str(config_dir))
+    loader = ConfigLoader(str(config_dir))
     loader.load_config()
 
     # Log the state after loading
@@ -130,7 +130,7 @@ def test_variable_interpolation(config_dir):
 def test_plugin_validation():
     """Test plugin configuration validation"""
     logger.info("Starting test_plugin_validation")
-    loader = HCLConfigLoader("dummy_path")  # Path not used for this test
+    loader = ConfigLoader("dummy_path")  # Path not used for this test
 
     # Test missing source
     logger.info("Testing plugin with missing source")
@@ -154,7 +154,7 @@ def test_plugin_validation():
 def test_runtime_version(config_dir):
     """Test runtime version is correctly loaded"""
     logger.info("Starting test_runtime_version")
-    loader = HCLConfigLoader(str(config_dir))
+    loader = ConfigLoader(str(config_dir))
     loader.load_config()
 
     logger.debug("Runtime configuration: %s", loader.runtime)
@@ -197,7 +197,7 @@ agent "local" {
 """
     )
 
-    loader = HCLConfigLoader(str(config_dir))
+    loader = ConfigLoader(str(config_dir))
     agents = loader.load_config()
     config = agents["local"]
 
@@ -244,8 +244,8 @@ agent "local" {
 """
     )
 
-    loader = HCLConfigLoader(str(config_dir))
-    with pytest.raises(ValueError, match="Model referenced by agent 'local' not found"):
+    loader = ConfigLoader(str(config_dir))
+    with pytest.raises(RuntimeError, match="Reference validation failed"):
         agents = loader.load_config()
 
 
@@ -297,20 +297,20 @@ agent "local" {
 """
     )
 
-    loader = HCLConfigLoader(str(config_dir))
-    agents = loader.load_config()
-    config = agents["local"]
+    loader = ConfigLoader(str(config_dir))
+    config = loader.load_config()
+    agent_config = config["agent"]["local"]
 
     # Test nested variable interpolation in model settings
-    model = config["model"]
+    model = agent_config["model"]
     assert model["settings"]["temperature"] == 0.7
     assert model["settings"]["nested"]["deep"] == 0.7
     assert model["settings"]["nested"]["deeper"]["deepest"] == 1.2
 
     # Test variable interpolation in lists and dicts
-    assert config["settings"]["list_with_vars"] == [0.7, 1.2]
-    assert config["settings"]["dict_with_vars"]["first"] == 0.7
-    assert config["settings"]["dict_with_vars"]["second"] == 1.2
+    assert agent_config["settings"]["list_with_vars"] == [0.7, 1.2]
+    assert agent_config["settings"]["dict_with_vars"]["first"] == 0.7
+    assert agent_config["settings"]["dict_with_vars"]["second"] == 1.2
 
 
 def test_plugin_string_interpolation(config_dir):
@@ -332,7 +332,7 @@ agent "local" {
 """
     )
 
-    loader = HCLConfigLoader(str(config_dir))
+    loader = ConfigLoader(str(config_dir))
     agents = loader.load_config()
     config = agents["local"]
 
@@ -373,7 +373,7 @@ agent "local" {
 """
     )
 
-    loader = HCLConfigLoader(str(config_dir))
+    loader = ConfigLoader(str(config_dir))
     agents = loader.load_config()
     config = agents["local"]
 
