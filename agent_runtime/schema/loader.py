@@ -439,8 +439,10 @@ class Interpolator:
 class ConfigLoader:
     """Main configuration loader that handles HCL files and variables."""
 
-    def __init__(self, config_dir: Path):
-        self.config_dir = config_dir
+    def __init__(self, config_dir: str | Path):
+        self.config_dir = (
+            Path(config_dir) if isinstance(config_dir, str) else config_dir
+        )
         self.validator = SchemaValidator()
         self.merger = BlockMerger()
         self.runtime: Dict[str, Any] = {}

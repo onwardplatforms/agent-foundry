@@ -10,7 +10,7 @@ from semantic_kernel import Kernel
 from .schema.loader import ConfigLoader, VarLoader
 from .plugins.manager import PluginConfig, PluginManager
 from .agent import Agent
-from .cli.output import Style
+from .utils import Style
 
 logger = logging.getLogger(__name__)
 

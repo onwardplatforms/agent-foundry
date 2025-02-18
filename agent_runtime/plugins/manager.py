@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, cast
 
 import requests
 import click
-from agent_runtime.cli.output import Style
+from agent_runtime.utils import Style
 
 
 class PluginNotFoundError(Exception):

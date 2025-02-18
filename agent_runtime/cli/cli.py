@@ -14,7 +14,7 @@ from agent_runtime.core import (
     init_plugins,
     run_agent_interactive,
 )
-from agent_runtime.cli.output import Style
+from agent_runtime.utils import Style
 
 # Load environment from .env
 load_dotenv()
