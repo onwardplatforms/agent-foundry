@@ -12,12 +12,12 @@
       "scoped_name": "@local/code_editor",
       "source": "./local_plugins/code_editor_v2",
       "type": "local",
-      "sha": "fedb274f484816dfd70365883c34b7081e4fa7a2a3bbc968a30e8983f8b5ac3f"
+      "sha": "f2055a611c210bf6777c80954e0d3f8320bada2205d8ce3406cadd70a4aadc31"
     },
     {
       "name": "echo",
       "scoped_name": "@onwardplatforms/echo",
-      "source": "onwardplatforms/echo",
+      "source": "https://github.com/onwardplatforms/agentruntime-plugin-echo",
       "type": "remote",
       "version": "0.0.1",
       "commit_sha": "a9d0f45323eb3acc8aa05552e8e724362257bfda"

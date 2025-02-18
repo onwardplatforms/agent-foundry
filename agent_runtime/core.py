@@ -7,11 +7,10 @@ from typing import Dict, Any, Optional, List, AsyncIterator, Tuple
 import click
 from semantic_kernel import Kernel
 
-from .config.hcl_loader import HCLConfigLoader
-from .config.var_loader import VarLoader
+from .schema.loader import ConfigLoader, VarLoader
 from .plugins.manager import PluginConfig, PluginManager
 from .agent import Agent
-from .cli.output import Style
+from .utils import Style
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +42,7 @@ def load_and_validate_config(
     cli_vars: Optional[Tuple[str, ...]] = None,
 ) -> Dict[str, Any]:
     """Load and validate configuration from directory."""
-    loader = HCLConfigLoader(config_dir)
+    loader = ConfigLoader(config_dir)
 
     # Set up variable handling
     var_loader = VarLoader()

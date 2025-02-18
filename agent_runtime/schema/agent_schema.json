@@ -9,8 +9,13 @@
                     "required_version": {
                         "type": "string",
                         "required": false,
-                        "description": "Required version of Agent Runtime",
-                        "pattern": "^\\d+\\.\\d+\\.\\d+$"
+                        "description": "Required version of Agent Runtime. Supports exact versions (0.1.0), single constraints (>=0.1.0, ~>0.1.0), or multiple constraints (>= 1.2.0, < 2.0.0)",
+                        "validation": [
+                            {
+                                "pattern": "^(((>=|<=|>|<|!=|~>)\\s*\\d+\\.\\d+\\.\\d+\\s*(,\\s*(>=|<=|>|<|!=|~>)\\s*\\d+\\.\\d+\\.\\d+\\s*)*)|=?\\s*\\d+\\.\\d+\\.\\d+)$",
+                                "error_message": "Invalid version constraint format. Examples: '0.1.0', '>=0.1.0', '>=0.1.0,<2.0.0'"
+                            }
+                        ]
                     }
                 }
             }
@@ -23,13 +28,18 @@
                         "type": "string",
                         "required": false,
                         "description": "Type constraint for the variable",
-                        "options": [
-                            "string",
-                            "number",
-                            "bool",
-                            "list",
-                            "map",
-                            "any"
+                        "validation": [
+                            {
+                                "options": [
+                                    "string",
+                                    "number",
+                                    "bool",
+                                    "list",
+                                    "map",
+                                    "any"
+                                ],
+                                "error_message": "Invalid variable type. Must be one of: string, number, bool, list, map, any"
+                            }
                         ]
                     },
                     "description": {
@@ -58,9 +68,14 @@
                         "type": "string",
                         "required": true,
                         "description": "The AI model provider to use",
-                        "options": [
-                            "openai",
-                            "ollama"
+                        "validation": [
+                            {
+                                "options": [
+                                    "openai",
+                                    "ollama"
+                                ],
+                                "error_message": "Model provider must be either 'openai' or 'ollama'"
+                            }
                         ]
                     },
                     "name": {
@@ -72,24 +87,42 @@
                 "block_types": {
                     "settings": {
                         "nesting_mode": "single",
+                        "validation": [
+                            {
+                                "range": {
+                                    "max": 1
+                                },
+                                "error_message": "Only one settings block is allowed per model"
+                            }
+                        ],
                         "block": {
                             "attributes": {
                                 "temperature": {
                                     "type": "number",
                                     "required": false,
                                     "description": "Temperature for model sampling",
-                                    "constraints": {
-                                        "min": 0,
-                                        "max": 1
-                                    }
+                                    "validation": [
+                                        {
+                                            "range": {
+                                                "min": 0,
+                                                "max": 1
+                                            },
+                                            "error_message": "Temperature must be between 0 and 1"
+                                        }
+                                    ]
                                 },
                                 "max_tokens": {
                                     "type": "number",
                                     "required": false,
                                     "description": "Maximum tokens to generate",
-                                    "constraints": {
-                                        "min": 1
-                                    }
+                                    "validation": [
+                                        {
+                                            "range": {
+                                                "min": 1
+                                            },
+                                            "error_message": "Maximum tokens must be at least 1"
+                                        }
+                                    ]
                                 }
                             }
                         }
@@ -99,24 +132,58 @@
         },
         "plugin": {
             "version": 1,
-            "block": {
-                "attributes": {
-                    "source": {
-                        "type": "string",
-                        "required": true,
-                        "description": "Source path or URL",
-                        "pattern": "^(\\.\\/.*|\\.\\.\\/.*|https://github\\.com/[\\w-]+/[\\w-]+|[\\w-]+/[\\w-]+)$"
-                    },
-                    "version": {
-                        "type": "string",
-                        "required": false,
-                        "description": "Version (required for remote plugins)",
-                        "pattern": "^v?\\d+\\.\\d+\\.\\d+(-[\\w.]+)?$"
-                    },
-                    "variables": {
-                        "type": "map",
-                        "required": false,
-                        "description": "Variables to pass to the plugin"
+            "local": {
+                "block": {
+                    "attributes": {
+                        "source": {
+                            "type": "string",
+                            "required": true,
+                            "description": "Local source path",
+                            "validation": [
+                                {
+                                    "pattern": "^(\\./.*)|(\\.\\./.*)$",
+                                    "error_message": "Local plugin source must start with ./ or ../"
+                                }
+                            ]
+                        },
+                        "variables": {
+                            "type": "map",
+                            "required": false,
+                            "description": "Variables to pass to the plugin"
+                        }
+                    }
+                }
+            },
+            "remote": {
+                "block": {
+                    "attributes": {
+                        "source": {
+                            "type": "string",
+                            "required": true,
+                            "description": "Remote source identifier - either a full GitHub URL (https://github.com/org/agentruntime-plugin-name) or shorthand (org/name)",
+                            "validation": [
+                                {
+                                    "pattern": "^(?:(?:https://)?github\\.com/([\\w-]+)/agentruntime-plugin-([\\w-]+)|([\\w-]+)/([\\w-]+))$",
+                                    "error_message": "Remote plugin source must be a GitHub URL (https://github.com/org/agentruntime-plugin-name) or shorthand (org/name)"
+                                }
+                            ]
+                        },
+                        "version": {
+                            "type": "string",
+                            "required": true,
+                            "description": "Version of the remote plugin. Supports exact versions (0.1.0), single constraints (>=0.1.0, ~>0.1.0), or multiple constraints (>= 1.2.0, < 2.0.0)",
+                            "validation": [
+                                {
+                                    "pattern": "^(((>=|<=|>|<|!=|~>)\\s*\\d+\\.\\d+\\.\\d+\\s*(,\\s*(>=|<=|>|<|!=|~>)\\s*\\d+\\.\\d+\\.\\d+\\s*)*)|=?\\s*\\d+\\.\\d+\\.\\d+)$",
+                                    "error_message": "Invalid version constraint format. Examples: '0.1.0', '>=0.1.0', '>=0.1.0,<2.0.0'"
+                                }
+                            ]
+                        },
+                        "variables": {
+                            "type": "map",
+                            "required": false,
+                            "description": "Variables to pass to the plugin"
+                        }
                     }
                 }
             }

@@ -15,9 +15,9 @@ agent "code_editor" {
 }
 
 agent "echo" {
-  name           = "test-agent-remote-${model.llama3.name}"
+  name           = "test-agent-remote-${model.gpt4o.name}"
   description    = "A test agent using Ollama provider"
-  system_prompt  = "Always say Jeff"
-  model          = model.llama3
-  plugins        = [plugin.remote.echo]
+  system_prompt  = "Always return the exact function result."
+  model          = model.gpt4o
+  plugins        = [plugin.local.echo]
 }
