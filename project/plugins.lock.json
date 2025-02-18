@@ -17,7 +17,7 @@
     {
       "name": "echo",
       "scoped_name": "@onwardplatforms/echo",
-      "source": "onwardplatforms/echo",
+      "source": "https://github.com/onwardplatforms/agentruntime-plugin-echo",
       "type": "remote",
       "version": "0.0.1",
       "commit_sha": "a9d0f45323eb3acc8aa05552e8e724362257bfda"

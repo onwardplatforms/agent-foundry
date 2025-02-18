@@ -562,7 +562,7 @@ class PluginManager:
         self, plugins: List[PluginConfig], lock_data: Optional[Dict[str, Any]] = None
     ) -> Dict[str, List[Dict[str, Any]]]:
         """Compare current plugins with the global lockfile and return detailed changes."""
-        changes = {"added": [], "removed": [], "updated": []}
+        changes = {"added": [], "removed": [], "updated": [], "source_only": []}
 
         if lock_data is None:
             lock_path = self.base_dir / "plugins.lock.json"
@@ -596,8 +596,18 @@ class PluginManager:
 
             locked = locked_map[cfg.scoped_name]
             update_info = {"name": cfg.scoped_name, "changes": []}
+            source_change = None
 
             if cfg.is_github_source:
+                # Check for source format changes
+                if cfg.source != locked.get("source"):
+                    source_change = {
+                        "type": "source",
+                        "old": locked.get("source"),
+                        "new": cfg.source,
+                    }
+
+                # Check for functional changes (version/SHA)
                 if cfg.version != locked.get("version"):
                     update_info["changes"].append(
                         {
@@ -617,6 +627,14 @@ class PluginManager:
                         }
                     )
             else:
+                # Check for source path changes in local plugins
+                if cfg.source != locked.get("source"):
+                    source_change = {
+                        "type": "source",
+                        "old": locked.get("source"),
+                        "new": cfg.source,
+                    }
+
                 src_path = cfg.get_install_dir(self.plugins_dir, self.base_dir)
                 if src_path.exists():
                     current_sha = self._compute_directory_sha(src_path)
@@ -626,7 +644,15 @@ class PluginManager:
                             {"type": "sha", "old": locked_sha, "new": current_sha}
                         )
 
-            if update_info["changes"]:
+            # If we only have source changes, add to source_only
+            if source_change and not update_info["changes"]:
+                changes["source_only"].append(
+                    {"name": cfg.scoped_name, "changes": [source_change]}
+                )
+            # If we have functional changes, include source change if it exists
+            elif update_info["changes"]:
+                if source_change:
+                    update_info["changes"].append(source_change)
                 changes["updated"].append(update_info)
 
         return changes
@@ -680,96 +706,8 @@ class PluginManager:
             # Track plugins we've already reported on to avoid duplicates
             reported_plugins = set()
 
-            # Separate configs by type
-            local_configs = [c for c in configs if c.is_local_source]
-            remote_configs = [c for c in configs if c.is_github_source]
-
-            # Display initialization header
-            click.echo(Style.header("Initializing agent configuration..."))
-            click.echo("")
-
-            # Display local plugins section if there are any local plugins
-            if local_configs:
-                click.echo("- Local plugins:")
-
-                # Process all local plugins
-                for cfg in local_configs:
-                    if cfg.scoped_name in reported_plugins:
-                        continue
-                    reported_plugins.add(cfg.scoped_name)
-
-                    # Check if this plugin has updates
-                    update_info = next(
-                        (p for p in changes["updated"] if p["name"] == cfg.scoped_name),
-                        None,
-                    )
-
-                    if update_info:
-                        changes_desc = []
-                        for change in update_info["changes"]:
-                            if change["type"] == "sha":
-                                changes_desc.append("local changes detected")
-                        click.echo(
-                            Style.plugin_status(
-                                cfg.scoped_name,
-                                f"updating ({', '.join(changes_desc)})",
-                                "yellow",
-                            )
-                        )
-                    else:
-                        click.echo(Style.plugin_status(cfg.scoped_name, "up to date"))
-
-            # Display remote plugins section if there are any remote plugins
-            if remote_configs:
-                if local_configs:  # Add a newline if we had local plugins
-                    click.echo("")
-                click.echo("- Remote plugins:")
-
-                # Process all remote plugins
-                for cfg in remote_configs:
-                    if cfg.scoped_name in reported_plugins:
-                        continue
-                    reported_plugins.add(cfg.scoped_name)
-
-                    # Check if this plugin has updates
-                    update_info = next(
-                        (p for p in changes["updated"] if p["name"] == cfg.scoped_name),
-                        None,
-                    )
-
-                    if update_info:
-                        changes_desc = []
-                        for change in update_info["changes"]:
-                            if change["type"] == "version":
-                                changes_desc.append(
-                                    f"version {change['old']} → {change['new']}"
-                                )
-                            elif change["type"] == "commit":
-                                old_commit = (
-                                    change["old"][:7] if change["old"] else "none"
-                                )
-                                new_commit = (
-                                    change["new"][:7] if change["new"] else "none"
-                                )
-                                changes_desc.append(
-                                    f"commit {old_commit} → {new_commit}"
-                                )
-                        click.echo(
-                            Style.plugin_status(
-                                cfg.scoped_name,
-                                f"updating ({', '.join(changes_desc)})",
-                                "yellow",
-                            )
-                        )
-                    else:
-                        click.echo(Style.plugin_status(cfg.scoped_name, "up to date"))
-
-            # Display any new plugins that weren't covered above
+            # First display any new plugins
             if changes["added"]:
-                if (
-                    local_configs or remote_configs
-                ):  # Add a newline if we had other sections
-                    click.echo("")
                 click.echo("- Installing new plugins:")
                 for plugin in changes["added"]:
                     if plugin["name"] in reported_plugins:
@@ -778,6 +716,109 @@ class PluginManager:
                     click.echo(
                         Style.plugin_status(plugin["name"], "installing", "blue")
                     )
+                click.echo("")  # Add newline after new plugins section
+
+            # Separate configs by type
+            local_configs = [c for c in configs if c.is_local_source]
+            remote_configs = [c for c in configs if c.is_github_source]
+
+            # Display initialization header
+            click.echo(Style.header("Initializing agent configuration..."))
+            click.echo("")
+
+            # Process all local plugins
+            for cfg in local_configs:
+                if cfg.scoped_name in reported_plugins:
+                    continue
+                reported_plugins.add(cfg.scoped_name)
+
+                # Skip if this is a new plugin (already reported)
+                if any(p["name"] == cfg.scoped_name for p in changes["added"]):
+                    continue
+
+                # Check if this plugin has updates
+                update_info = next(
+                    (p for p in changes["updated"] if p["name"] == cfg.scoped_name),
+                    None,
+                )
+                source_only = next(
+                    (p for p in changes["source_only"] if p["name"] == cfg.scoped_name),
+                    None,
+                )
+
+                if update_info:
+                    changes_desc = []
+                    for change in update_info["changes"]:
+                        if change["type"] == "sha":
+                            changes_desc.append("local changes detected")
+                    click.echo(
+                        Style.plugin_status(
+                            cfg.scoped_name,
+                            f"updating ({', '.join(changes_desc)})",
+                            "yellow",
+                        )
+                    )
+                elif source_only:
+                    click.echo(
+                        Style.plugin_status(
+                            cfg.scoped_name,
+                            "up to date (source format updated)",
+                            "blue",
+                        )
+                    )
+                else:
+                    click.echo(Style.plugin_status(cfg.scoped_name, "up to date"))
+
+            # Process all remote plugins
+            for cfg in remote_configs:
+                if cfg.scoped_name in reported_plugins:
+                    continue
+                reported_plugins.add(cfg.scoped_name)
+
+                # Skip if this is a new plugin (already reported)
+                if any(p["name"] == cfg.scoped_name for p in changes["added"]):
+                    continue
+
+                # Check if this plugin has updates
+                update_info = next(
+                    (p for p in changes["updated"] if p["name"] == cfg.scoped_name),
+                    None,
+                )
+                source_only = next(
+                    (p for p in changes["source_only"] if p["name"] == cfg.scoped_name),
+                    None,
+                )
+
+                if update_info:
+                    changes_desc = []
+                    for change in update_info["changes"]:
+                        if change["type"] == "version":
+                            changes_desc.append(
+                                f"version {change['old']} → {change['new']}"
+                            )
+                        elif change["type"] == "commit":
+                            old_commit = change["old"][:7] if change["old"] else "none"
+                            new_commit = change["new"][:7] if change["new"] else "none"
+                            changes_desc.append(f"commit {old_commit} → {new_commit}")
+                        elif change["type"] == "source":
+                            changes_desc.append(f"source format updated")
+                    click.echo(
+                        Style.plugin_status(
+                            cfg.scoped_name,
+                            f"updating ({', '.join(changes_desc)})",
+                            "yellow",
+                        )
+                    )
+                elif source_only:
+                    click.echo(
+                        Style.plugin_status(
+                            cfg.scoped_name,
+                            "up to date (source format updated)",
+                            "blue",
+                        )
+                    )
+                else:
+                    click.echo(Style.plugin_status(cfg.scoped_name, "up to date"))
 
             # Display any removed plugins
             if changes["removed"]:
