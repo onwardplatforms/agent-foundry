@@ -37,11 +37,12 @@ class SchemaValidator:
             f"Starting validation of config: {json.dumps(raw_config, indent=2)}"
         )
 
-        # First collect all defined names and their structures
+        # First collect all defined blocks for reference validation
         self.defined_vars: Dict[str, Any] = {}
         self.defined_models: Dict[str, Any] = {}
         self.defined_plugins: Dict[str, Any] = {}
         self.defined_agents: Dict[str, Any] = {}
+        self.runtime: Dict[str, Any] = {}
 
         # Extract and validate each block type
         for block_type, blocks in raw_config.items():
@@ -71,66 +72,106 @@ class SchemaValidator:
                     )
                     continue
 
-                # Special handling for plugin blocks which have a nested structure
-                if block_type == "plugin":
-                    for plugin_type, plugin_blocks in block.items():
-                        # Validate plugin type
-                        if plugin_type not in block_schema:
+                # -------------------------------------------------------------------
+                # STEP 1: Distinguish labeled vs. unlabeled block
+                # -------------------------------------------------------------------
+                #
+                # If we have exactly one key in `block`, treat it as "labeled" block
+                # (like `variable "signature" { ... }` => {"signature": {...}}).
+                #
+                # Otherwise, treat it as an unlabeled block
+                # (like `runtime { ... }` => {required_version=..., random_var=...}).
+                #
+                # The existing logic for sub-labeled blocks (plugin.local, plugin.remote)
+                # remains unchanged, but we skip that if it's unlabeled.
+                #
+                if len(block) == 1:
+                    # Possibly sub-labeled or labeled
+                    label, content = next(iter(block.items()))
+
+                    # If the schema has sub-types (like plugin.local, plugin.remote)
+                    if label in block_schema and "block" in block_schema[label]:
+                        # This is a sub-typed block
+                        if not isinstance(content, dict):
                             errors.append(
-                                f"Unknown plugin type '{plugin_type}', must be one of: {', '.join(k for k in block_schema.keys() if k != 'version')}"
+                                f"Expected dictionary for {block_type}.{label}, got {type(content)}"
                             )
                             continue
 
-                        if not isinstance(plugin_blocks, dict):
-                            errors.append(
-                                f"Expected dictionary for plugin type '{plugin_type}', got {type(plugin_blocks)}"
-                            )
-                            continue
-
-                        # Get the schema for this plugin type
-                        type_schema = block_schema[plugin_type]
-
-                        for plugin_name, plugin_content in plugin_blocks.items():
+                        # Validate each labeled block within this subtype
+                        for sub_label, sub_content in content.items():
                             logger.debug(
-                                f"Validating plugin block '{plugin_type}.{plugin_name}': {json.dumps(plugin_content, indent=2)}"
+                                f"Validating {block_type}.{label}.{sub_label}: {json.dumps(sub_content, indent=2)}"
                             )
 
-                            # Store for reference validation
-                            plugin_key = f"{plugin_type}:{plugin_name}"
-                            self.defined_plugins[plugin_key] = plugin_content
+                            # Store for reference validation if needed
+                            if block_type == "plugin":
+                                self.defined_plugins[f"{label}:{sub_label}"] = (
+                                    sub_content
+                                )
 
-                            # Validate against type-specific schema
                             block_errors = self._validate_block_content(
-                                plugin_content,
-                                type_schema["block"],
-                                f"plugin.{plugin_type}.{plugin_name}",
+                                sub_content,
+                                block_schema[label]["block"],
+                                f"{block_type}.{label}.{sub_label}",
                             )
                             errors.extend(block_errors)
-                else:
-                    # For non-plugin blocks, they just have a single label for identification
-                    for block_name, block_content in block.items():
+
+                    else:
+                        # This is a regular labeled block
                         logger.debug(
-                            f"Validating {block_type} block '{block_name}': {json.dumps(block_content, indent=2)}"
+                            f"Validating {block_type}.{label}: {json.dumps(content, indent=2)}"
                         )
 
-                        # Store in appropriate collection for reference validation
+                        # Store for reference validation
                         if block_type == "variable":
-                            self.defined_vars[block_name] = block_content
+                            self.defined_vars[label] = content
                         elif block_type == "model":
-                            self.defined_models[block_name] = block_content
+                            self.defined_models[label] = content
                         elif block_type == "agent":
-                            self.defined_agents[block_name] = block_content
+                            self.defined_agents[label] = content
+                        elif block_type == "runtime":
+                            # If we do "runtime \"something\" {}", we store it
+                            self.runtime = content
 
-                        # Get the schema - for non-plugin blocks it's directly in the block field
-                        block_schema_to_use = block_schema["block"]
-
-                        # Validate the block content against the schema
                         block_errors = self._validate_block_content(
-                            block_content,
-                            block_schema_to_use,
-                            f"{block_type}.{block_name}",
+                            content, block_schema["block"], f"{block_type}.{label}"
                         )
                         errors.extend(block_errors)
+
+                else:
+                    # -----------------------------------------------------------------
+                    # UNLABELED BLOCK:
+                    # e.g. "runtime": [ { required_version=..., random_var=...} ]
+                    # We treat the entire dictionary as the content to be validated
+                    # and then store references if needed (like for runtime).
+                    # -----------------------------------------------------------------
+                    logger.debug(
+                        f"Validating unlabeled {block_type} block: {json.dumps(block, indent=2)}"
+                    )
+
+                    # For references, if it's runtime, store it; if it's a variable,
+                    # we can't store it by name, so it won't be referenceable by label.
+                    # But we'll still do the schema validation below.
+                    if block_type == "runtime":
+                        self.runtime = block
+                    elif block_type == "variable":
+                        # We have no label, so can't store in self.defined_vars.
+                        # The user won't be able to do var.someLabel references,
+                        # but we still validate the block.
+                        pass
+                    elif block_type == "model":
+                        # Same logic, no label => can't store in self.defined_models
+                        pass
+                    elif block_type == "agent":
+                        pass
+                    # If plugin => sub-labeled approach is used, so unlabeled plugin is unusual.
+
+                    # Now just validate the entire block
+                    block_errors = self._validate_block_content(
+                        block, block_schema["block"], f"{block_type}"
+                    )
+                    errors.extend(block_errors)
 
         # Now validate all references in the config
         logger.debug("Starting reference validation")
@@ -151,7 +192,6 @@ class SchemaValidator:
 
         # If content is not a dictionary, validate it directly as an attribute
         if not isinstance(content, dict):
-            # Find the attribute schema for this path
             path_parts = path.split(".")
             if len(path_parts) >= 2:
                 block_type, attr_name = path_parts[-2:]
@@ -167,19 +207,53 @@ class SchemaValidator:
                         errors.append(f"In {path}: Unknown attribute '{attr_name}'")
             return errors
 
-        # Get all valid attribute names from schema
+        # Get all valid attribute names and block types from schema
         valid_attributes = set(schema.get("attributes", {}).keys())
         valid_block_types = set(schema.get("block_types", {}).keys())
 
-        # Check for unknown attributes (only for non-map attributes)
-        for attr_name, attr_value in content.items():
-            # Skip validation if this attribute is a map type (allows arbitrary keys)
-            attr_schema = schema.get("attributes", {}).get(attr_name)
+        # Check for unknown attributes or blocks
+        for key, value in content.items():
+            # Skip map type attributes as they can have arbitrary keys
+            attr_schema = schema.get("attributes", {}).get(key)
             if attr_schema and attr_schema.get("type") == "map":
                 continue
 
-            if attr_name not in valid_attributes and attr_name not in valid_block_types:
-                errors.append(f"In {path}: Unknown attribute '{attr_name}'")
+            # Check if this is a valid attribute or block type
+            if key not in valid_attributes and key not in valid_block_types:
+                errors.append(f"In {path}: Unknown attribute or block '{key}'")
+                continue
+
+            # If it's a block type, validate its content against the block schema
+            if key in valid_block_types:
+                block_schema = schema["block_types"][key]
+                nesting_mode = block_schema.get("nesting_mode", "single")
+
+                # HCL parser gives us a list for nested blocks
+                if not isinstance(value, list):
+                    errors.append(
+                        f"In {path}.{key}: Expected list for nested block, got {type(value).__name__}"
+                    )
+                    continue
+
+                # For "single" nesting mode, we should only have one item
+                if nesting_mode == "single" and len(value) > 1:
+                    errors.append(
+                        f"In {path}.{key}: Multiple nested blocks not allowed (nesting_mode=single)"
+                    )
+                    continue
+
+                # Validate each block in the list
+                for i, block in enumerate(value):
+                    if not isinstance(block, dict):
+                        errors.append(
+                            f"In {path}.{key}[{i}]: Expected dictionary, got {type(block).__name__}"
+                        )
+                        continue
+
+                    block_errors = self._validate_block_content(
+                        block, block_schema["block"], f"{path}.{key}[{i}]"
+                    )
+                    errors.extend(block_errors)
 
         # Validate required attributes
         if "attributes" in schema:
@@ -194,22 +268,6 @@ class SchemaValidator:
                         attr_value, attr_schema, f"{path}.{attr_name}"
                     )
                     errors.extend(attr_errors)
-
-        # Validate nested blocks
-        if "block_types" in schema:
-            for block_type, block_schema in schema["block_types"].items():
-                if block_type in content:
-                    if not isinstance(content[block_type], dict):
-                        errors.append(
-                            f"In {path}.{block_type}: Expected dictionary, got {type(content[block_type]).__name__}"
-                        )
-                    else:
-                        block_errors = self._validate_block_content(
-                            content[block_type],
-                            block_schema["block"],
-                            f"{path}.{block_type}",
-                        )
-                        errors.extend(block_errors)
 
         return errors
 
@@ -228,41 +286,40 @@ class SchemaValidator:
         if attr_type == "any":
             return errors
 
-        # For block types, validate as a dictionary
-        if isinstance(value, dict):
-            # If it's a dictionary but schema expects a primitive, that's an error
-            if attr_type in ["string", "number", "bool"]:
-                errors.append(f"In {path}: Expected {attr_type}, got dictionary")
+        # If the schema says "string"/"number"/"bool" but the user gave a dict,
+        # we flag an error, etc.
+        if isinstance(value, dict) and attr_type in ["string", "number", "bool"]:
+            errors.append(f"In {path}: Expected {attr_type}, got dictionary")
             return errors
 
-        # For primitive types, validate according to schema
+        # Check types
         if attr_type == "string":
             if not isinstance(value, str):
                 errors.append(f"In {path}: Expected string, got {type(value).__name__}")
-            elif "pattern" in schema:
-                pattern = re.compile(schema["pattern"])
-                if not pattern.match(str(value)):
+            else:
+                # pattern
+                if "pattern" in schema:
+                    pattern = re.compile(schema["pattern"])
+                    if not pattern.match(value):
+                        errors.append(
+                            f"In {path}: Value '{value}' does not match pattern {schema['pattern']}"
+                        )
+                # options
+                if "options" in schema and value not in schema["options"]:
                     errors.append(
-                        f"In {path}: Value '{value}' does not match pattern {schema['pattern']}"
+                        f"In {path}: Value '{value}' must be one of: {', '.join(schema['options'])}"
                     )
-            elif "options" in schema and value not in schema["options"]:
-                errors.append(
-                    f"In {path}: Value '{value}' must be one of: {', '.join(schema['options'])}"
-                )
 
         elif attr_type == "number":
             if not isinstance(value, (int, float)):
                 errors.append(f"In {path}: Expected number, got {type(value).__name__}")
-            elif "constraints" in schema:
-                constraints = schema["constraints"]
-                if "min" in constraints and value < constraints["min"]:
-                    errors.append(
-                        f"In {path}: Value {value} must be greater than or equal to {constraints['min']}"
-                    )
-                if "max" in constraints and value > constraints["max"]:
-                    errors.append(
-                        f"In {path}: Value {value} must be less than or equal to {constraints['max']}"
-                    )
+            else:
+                if "constraints" in schema:
+                    c = schema["constraints"]
+                    if "min" in c and value < c["min"]:
+                        errors.append(f"In {path}: Value {value} must be >= {c['min']}")
+                    if "max" in c and value > c["max"]:
+                        errors.append(f"In {path}: Value {value} must be <= {c['max']}")
 
         elif attr_type == "bool":
             if not isinstance(value, bool):
@@ -317,7 +374,6 @@ class SchemaValidator:
         if not parts:
             return
 
-        # Handle the root reference first
         if parts[0] == "var":
             if len(parts) < 2:
                 errors.append(f"In {path}: Invalid variable reference '{ref}'")
@@ -332,7 +388,6 @@ class SchemaValidator:
                     f"  Available variables: {available}"
                 )
                 return
-            # For nested references, validate against the variable's structure
             if len(parts) > 2:
                 self._validate_nested_reference(
                     parts[2:],
@@ -356,7 +411,6 @@ class SchemaValidator:
                     f"  Available models: {available}"
                 )
                 return
-            # For nested references, validate against the model's structure
             if len(parts) > 2:
                 self._validate_nested_reference(
                     parts[2:],
@@ -380,7 +434,6 @@ class SchemaValidator:
                     f"  Available plugins: {available}"
                 )
                 return
-            # For nested references, validate against the plugin's structure
             if len(parts) > 3:
                 self._validate_nested_reference(
                     parts[3:],
@@ -404,7 +457,6 @@ class SchemaValidator:
                     f"  Available agents: {available}"
                 )
                 return
-            # For nested references, validate against the agent's structure
             if len(parts) > 2:
                 self._validate_nested_reference(
                     parts[2:],
@@ -488,46 +540,70 @@ class BlockMerger:
 
     def _merge_one_block(self, block_type: str, block_def: Dict[str, Any]) -> None:
         """
-        Merge a single block (e.g. 'model' => {"llama2_instance": {...}}) into our aggregator.
+        Merge a single block into our aggregator. Handles both labeled and unlabeled blocks:
+
+        Labeled blocks (e.g. 'model "gpt4" { ... }') come in as:
+            {"gpt4": {...}}
+
+        Unlabeled blocks (e.g. 'runtime { ... }') come in as:
+            {"required_version": "0.0.1", ...}
+
+        Plugin blocks are special as they have two labels:
+            {"local": {"echo": {...}}}
         """
-        if block_type == "runtime":
-            # Typically there's only one runtime block, but let's just do an update
-            merged_vals = self._convert_block_values(block_def)
-            self.runtime.update(merged_vals)
+        if not isinstance(block_def, dict):
+            return
 
-        elif block_type == "variable":
-            # E.g. {"model_temperature": {"description":"...", "type":"number", "default":0.7}}
-            var_name, var_content = next(iter(block_def.items()))
-            var_content_conv = self._convert_block_values(var_content)
-            self.variables_def[var_name] = var_content_conv
-
-        elif block_type == "model":
-            # E.g. {"llama2_instance": {"provider": "...", ...}}
+        # If the block has exactly one key and that key's value is a dict,
+        # treat it as a labeled block
+        if len(block_def) == 1 and isinstance(next(iter(block_def.values())), dict):
+            # Get the label and content
             name, content = next(iter(block_def.items()))
-            self.models[name] = self._convert_block_values(content)
 
-        elif block_type == "plugin":
-            # e.g. {"local": {"echo": { ... }}} => plugin type: local, name: echo
-            if len(block_def) == 1:
-                (plugin_type, inner) = next(iter(block_def.items()))
-                if isinstance(inner, dict) and len(inner) == 1:
-                    (plugin_name, plugin_content) = next(iter(inner.items()))
-                    full_key = f"{plugin_type}:{plugin_name}"
-                    merged = {"type": plugin_type, "name": plugin_name}
+            if block_type == "plugin":
+                # Plugin blocks are special as they have two labels
+                # e.g. {"local": {"echo": { ... }}}
+                if isinstance(content, dict) and len(content) == 1:
+                    (plugin_name, plugin_content) = next(iter(content.items()))
+                    full_key = f"{name}:{plugin_name}"
+                    merged = {"type": name, "name": plugin_name}
                     merged.update(self._convert_block_values(plugin_content))
 
-                    # Add validation for remote plugins requiring version
-                    if plugin_type == "remote" and "version" not in merged:
+                    # If remote plugin, ensure version
+                    if name == "remote" and "version" not in merged:
                         raise ValueError(
-                            f"Version is required for remote plugin 'plugin.{plugin_type}.{plugin_name}'"
+                            f"Version is required for remote plugin 'plugin.{name}.{plugin_name}'"
                         )
-
                     self.plugins[full_key] = merged
-
-        elif block_type == "agent":
-            # e.g. {"local": {"name":"...", ...}}
-            name, content = next(iter(block_def.items()))
-            self.agents[name] = self._convert_block_values(content)
+            else:
+                # Regular labeled block
+                content_conv = self._convert_block_values(content)
+                if block_type == "variable":
+                    self.variables_def[name] = content_conv
+                elif block_type == "model":
+                    self.models[name] = content_conv
+                elif block_type == "agent":
+                    self.agents[name] = content_conv
+                elif block_type == "runtime":
+                    self.runtime[name] = content_conv
+        else:
+            # Unlabeled block - merge the entire dictionary directly
+            content_conv = self._convert_block_values(block_def)
+            if block_type == "runtime":
+                self.runtime.update(content_conv)
+            elif block_type == "variable":
+                # For unlabeled variables, we can't store them by name
+                # but we still validate the block
+                pass
+            elif block_type == "model":
+                # Same for models - can't store without a label
+                pass
+            elif block_type == "agent":
+                # Same for agents - can't store without a label
+                pass
+            elif block_type == "plugin":
+                # Plugins must always have labels
+                pass
 
     def _convert_block_values(self, block: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -604,8 +680,9 @@ def compute_final_variables(
 
 class Interpolator:
     """
-    Recursively expands references (like ${var.something}, ${model.x}, ${plugin.local.echo}, etc.)
-    and also handles ternary expressions (like "some_expr ? valTrue : valFalse").
+    Recursively expands references (like ${var.something}, ${model.x},
+    ${plugin.local.echo}, etc.) and also handles ternary expressions
+    (like "some_expr ? valTrue : valFalse").
     Then tries converting numeric/boolean strings to actual types.
     """
 
@@ -665,8 +742,8 @@ class Interpolator:
 
     def _interpolate_value(self, val: Any, path: List[str]) -> Any:
         """
-        If val is a dict or list, recurse. If it's a string, do reference + ternary expansion,
-        then do best-effort numeric/boolean conversion.
+        If val is a dict or list, recurse. If it's a string, do reference + ternary
+        expansion, then do best-effort numeric/boolean conversion.
         """
         if isinstance(val, dict):
             for dk in list(val.keys()):
@@ -679,26 +756,20 @@ class Interpolator:
             return val
 
         if isinstance(val, str):
-            # 1) Try to parse it as a ternary expression: "cond ? x : y"
+            # 1) Try to parse ternary "expr ? x : y"
             ternary_result = self._try_ternary(val, path)
             if ternary_result is not None:
-                # recursively process the result if it's a string
                 val = self._interpolate_value(ternary_result, path)
                 return self._try_convert_primitive(val)
 
-            # 2) Expand all references like ${...} in the string
+            # 2) Expand ${...} references
             replaced = self._expand_references(val, path)
-            # 3) Attempt type conversion (bool, int, float)
+            # 3) Convert "true"/"false"/"123"/"0.7"
             return self._try_convert_primitive(replaced)
 
         return val
 
     def _try_ternary(self, val: str, path: List[str]) -> Optional[str]:
-        """
-        If val looks like a ternary "expr ? yes : no", we parse the expr,
-        evaluate it as a python bool, and return yes/no. Otherwise None.
-        """
-        # skip if it starts with "${", so we don't interpret e.g. "${var.cond}" as ternary
         if val.strip().startswith("${"):
             return None
 
@@ -710,12 +781,11 @@ class Interpolator:
         true_part = m.group(2).strip()
         false_part = m.group(3).strip()
 
-        # expand references inside condition
         cond_expanded = self._expand_references(condition_part, path)
 
-        # evaluate as bool
         result_bool = False
         try:
+            # Evaluate in a minimal safe environment
             result_bool = bool(eval(cond_expanded, {"__builtins__": None}, {}))
         except Exception as e:
             logger.debug(f"Failed ternary condition '{val}' => {e}")
@@ -723,23 +793,16 @@ class Interpolator:
         return true_part if result_bool else false_part
 
     def _expand_references(self, val: str, path: List[str]) -> str:
-        """
-        Replace all ${...} references with actual values from
-        var, model, plugin, agent, runtime, etc.
-        """
         replaced = val
         while True:
             m = self.REF_PATTERN.search(replaced)
             if not m:
                 break
-            expr = m.group(1).strip()  # stuff inside ${...}
+            expr = m.group(1).strip()
             sub_val = self._resolve_expr(expr, path)
-
-            # If the entire string is just ${...}, return the original value type
             if m.start() == 0 and m.end() == len(replaced):
-                return sub_val
+                return sub_val  # entire string was just ${...}
 
-            # Otherwise, we're doing string interpolation, so convert to string
             if not isinstance(sub_val, str):
                 sub_val = str(sub_val)
             start, end = m.span()
@@ -747,18 +810,10 @@ class Interpolator:
         return replaced
 
     def _resolve_expr(self, expr: str, path: List[str]) -> Any:
-        """
-        We support references:
-          var.name, model.name, plugin.local.echo, agent.remote, runtime.something
-        And nested references like:
-          model.llama2_instance.name, var.settings.temperature, etc.
-        If unknown, return "" (empty string).
-        """
         parts = expr.split(".")
         if not parts:
             return expr
 
-        # Get the root object first
         root_val = None
         if parts[0] == "var" and len(parts) > 1:
             root_val = self.variables.get(parts[1], "")
@@ -767,9 +822,7 @@ class Interpolator:
         elif parts[0] == "plugin" and len(parts) > 2:
             plugin_key = f"{parts[1]}:{parts[2]}"
             root_val = self.plugins.get(plugin_key, "")
-            parts = (
-                [parts[0]] + [f"{parts[1]}:{parts[2]}"] + parts[3:]
-            )  # Adjust parts list
+            parts = [parts[0]] + [plugin_key] + parts[3:]
         elif parts[0] == "agent" and len(parts) > 1:
             root_val = self.agents.get(parts[1], "")
         elif parts[0] == "runtime" and len(parts) > 1:
@@ -777,9 +830,8 @@ class Interpolator:
         else:
             return expr
 
-        # Now traverse into nested fields if they exist
         current = root_val
-        for part in parts[2:]:  # Skip the type and name parts we already handled
+        for part in parts[2:]:
             if isinstance(current, dict) and part in current:
                 current = current[part]
             elif isinstance(current, list) and part.isdigit():
@@ -790,14 +842,9 @@ class Interpolator:
                     return ""
             else:
                 return ""
-
         return current
 
     def _try_convert_primitive(self, val: str) -> Any:
-        """
-        After we've expanded references in a string, try to parse bool/int/float.
-        If it fails, keep it as string.
-        """
         if not isinstance(val, str):
             return val
 
@@ -807,7 +854,6 @@ class Interpolator:
         if lval == "false":
             return False
 
-        # attempt numeric
         try:
             if "." in val:
                 return float(val)
@@ -827,7 +873,7 @@ class Interpolator:
 class HCLConfigLoader:
     """
     1) Load all *.hcl in directory
-    2) Validate them (stub)
+    2) Validate them
     3) Merge into top-level dicts (runtime, variables_def, models, plugins, agents)
     4) Compute final var overrides => self.variables
     5) Single multi-pass interpolation + type conversion across everything
@@ -839,7 +885,6 @@ class HCLConfigLoader:
         logger.debug(f"Initializing HCLConfigLoader with config_dir: {config_dir}")
         self.validator = SchemaValidator()
         self.merger = BlockMerger()
-        # final data
         self.runtime: Dict[str, Any] = {}
         self.variables: Dict[str, Any] = {}
         self.models: Dict[str, Any] = {}
@@ -868,19 +913,18 @@ class HCLConfigLoader:
         if var_loader:
             final_vars = var_loader.get_final_values(self.merger.variables_def)
         else:
-            # Legacy support
             final_vars = compute_final_variables(
                 self.merger.variables_def, external_var_values
             )
 
-        # Put them in self
+        # Store
         self.runtime = self.merger.runtime
         self.variables = final_vars
         self.models = self.merger.models
         self.plugins = self.merger.plugins
         self.agents = self.merger.agents
 
-        # Single pass interpolation
+        # Interpolate
         interp = Interpolator(
             runtime=self.runtime,
             variables=self.variables,
@@ -891,7 +935,6 @@ class HCLConfigLoader:
         )
         interp.interpolate_all()
 
-        # Return final data
         return {
             "runtime": self.runtime,
             "variable": self.variables,
@@ -902,13 +945,11 @@ class HCLConfigLoader:
 
     def _load_and_validate_files(self) -> List[Dict[str, Any]]:
         """
-        Find all *.hcl files, parse them with hcl2, merge them, then validate the merged config.
-        Returns list of raw configs if no errors. Otherwise raise an error.
+        Find all *.hcl files, parse them, merge them, validate, and return the final merged config.
         """
         hcl_files = list(self.config_dir.glob("*.hcl"))
         logger.debug(f"Found HCL files: {[f.name for f in hcl_files]}")
 
-        # First load all files without validation
         raw_configs: List[Dict[str, Any]] = []
         parse_errors: List[str] = []
 
@@ -922,14 +963,12 @@ class HCLConfigLoader:
                     )
                     raw_configs.append(rc)
             except Exception as e:
-                error_msg = f"Error parsing {f.name}: {str(e)}"
-                parse_errors.append(error_msg)
+                parse_errors.append(f"Error parsing {f.name}: {str(e)}")
 
         if parse_errors:
-            msg = "HCL parsing failed:\n" + "\n".join(parse_errors)
-            raise RuntimeError(msg)
+            raise RuntimeError("HCL parsing failed:\n" + "\n".join(parse_errors))
 
-        # Merge all configs into one
+        # Merge them into a single config
         merged_config: Dict[str, Any] = {}
         for key in ["runtime", "variable", "model", "plugin", "agent"]:
             merged_config[key] = []
@@ -937,37 +976,15 @@ class HCLConfigLoader:
         for rc in raw_configs:
             for key in merged_config:
                 if key in rc:
-                    logger.debug(f"Merging {len(rc[key])} {key} blocks from config")
+                    logger.debug(f"Merging {len(rc[key])} {key} blocks from {rc}")
                     merged_config[key].extend(rc[key])
 
-        logger.debug("Merged configuration complete, starting validation")
-        logger.debug(f"Merged config: {json.dumps(merged_config, indent=2)}")
+        logger.debug("Merged config =>\n" + json.dumps(merged_config, indent=2))
 
-        # Now validate the merged config
-        validation_errors = self.validator.validate(merged_config)
-        if validation_errors:
-            raise RuntimeError(
-                "Configuration validation failed:\n" + "\n".join(validation_errors)
-            )
+        # Validate
+        errors = self.validator.validate(merged_config)
+        if errors:
+            raise RuntimeError("Configuration validation failed:\n" + "\n".join(errors))
 
         logger.debug("Configuration validation successful")
-        return [merged_config]  # Return merged config as single item
-
-
-##############################################################################
-# EXAMPLE USAGE
-##############################################################################
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
-    loader = HCLConfigLoader(Path("."))
-
-    # Suppose we want to override var.signature => "Signed by CFO"
-    overrides = {
-        # "signature": "Signed by CFO"
-    }
-
-    final_config = loader.load_config(external_var_values=overrides)
-
-    print("Final config =>")
-    print(json.dumps(final_config, indent=2))
+        return [merged_config]

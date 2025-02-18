@@ -9,8 +9,8 @@
                     "required_version": {
                         "type": "string",
                         "required": false,
-                        "description": "Required version of Agent Runtime",
-                        "pattern": "^\\d+\\.\\d+\\.\\d+$"
+                        "description": "Required version of Agent Runtime. Supports exact versions (0.1.0), single constraints (>=0.1.0, ~>0.1.0), or multiple constraints (>= 1.2.0, < 2.0.0)",
+                        "pattern": "^(((>=|<=|>|<|!=|~>)\\s*\\d+\\.\\d+\\.\\d+\\s*(,\\s*(>=|<=|>|<|!=|~>)\\s*\\d+\\.\\d+\\.\\d+\\s*)*)|=?\\s*\\d+\\.\\d+\\.\\d+)$"
                     }
                 }
             }
@@ -72,6 +72,7 @@
                 "block_types": {
                     "settings": {
                         "nesting_mode": "single",
+                        "max_items": 1,
                         "block": {
                             "attributes": {
                                 "temperature": {
@@ -79,8 +80,8 @@
                                     "required": false,
                                     "description": "Temperature for model sampling",
                                     "constraints": {
-                                        "min": 0,
-                                        "max": 1
+                                        "min_value": 0,
+                                        "max_value": 1
                                     }
                                 },
                                 "max_tokens": {
@@ -88,7 +89,7 @@
                                     "required": false,
                                     "description": "Maximum tokens to generate",
                                     "constraints": {
-                                        "min": 1
+                                        "min_value": 1
                                     }
                                 }
                             }
@@ -128,8 +129,8 @@
                         "version": {
                             "type": "string",
                             "required": true,
-                            "description": "Version of the remote plugin",
-                            "pattern": "^v?\\d+\\.\\d+\\.\\d+(-[\\w.]+)?$"
+                            "description": "Version of the remote plugin. Supports exact versions (0.1.0), single constraints (>=0.1.0, ~>0.1.0), or multiple constraints (>= 1.2.0, < 2.0.0)",
+                            "pattern": "^(((>=|<=|>|<|!=|~>)\\s*\\d+\\.\\d+\\.\\d+\\s*(,\\s*(>=|<=|>|<|!=|~>)\\s*\\d+\\.\\d+\\.\\d+\\s*)*)|=?\\s*\\d+\\.\\d+\\.\\d+)$"
                         },
                         "variables": {
                             "type": "map",

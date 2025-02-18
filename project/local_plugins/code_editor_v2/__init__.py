@@ -545,10 +545,11 @@ class CodeEditorV2Plugin:
     RULES:
     1. ALWAYS search before changing
     2. ALWAYS find all references
-    3. ALWAYS verify before applying
-    4. NEVER make partial updates
-    5. NEVER skip verification
-    6. STOP if verification fails
+    3. ALWAYS verify lint and format before applying
+    4. ALWAYS apply after verifying changes
+    5. NEVER make partial updates
+    6. NEVER skip verification
+    7. STOP if verification fails
 
     I handle these file types: Python, JavaScript/TypeScript, Go, Terraform, JSON/YAML.
     I prioritize correctness over speed and will always explain my actions.
