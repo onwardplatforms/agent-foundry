@@ -4,6 +4,7 @@ Error handling and recovery system for the agent runtime.
 
 import logging
 import asyncio
+import random
 from typing import (
     Optional,
     Dict,
@@ -220,4 +221,4 @@ class RetryHandler(Generic[T, R]):
 
         # Add jitter
         jitter = delay * self.config.jitter
-        return delay + (jitter * (2 * asyncio.random() - 1))
+        return delay + (jitter * (2 * random.random() - 1))

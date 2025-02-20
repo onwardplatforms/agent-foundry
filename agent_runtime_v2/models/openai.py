@@ -14,7 +14,7 @@ from openai import AsyncOpenAI, OpenAIError
 
 from .base import ModelProvider
 from ..config.types import ModelConfig
-from ..errors import ModelError, ErrorContext
+from ..errors import ModelError, ErrorContext, AgentRuntimeError
 
 
 class OpenAIProvider(ModelProvider):
@@ -74,29 +74,46 @@ class OpenAIProvider(ModelProvider):
                 messages.append({"role": msg.role, "content": msg.content})
 
             async def _make_request():
-                response = await self.client.chat.completions.create(
-                    model=self.config.model_name,
-                    messages=messages,
-                    stream=True,
-                    **self.config.settings,
+                try:
+                    response = await self.client.chat.completions.create(
+                        model=self.config.model_name,
+                        messages=messages,
+                        stream=True,
+                        **self.config.settings,
+                    )
+                    async for chunk in response:
+                        if chunk.choices[0].delta.content:
+                            yield chunk.choices[0].delta.content
+                except OpenAIError as e:
+                    raise ModelError(
+                        message=f"OpenAI API error: {str(e)}",
+                        context=context,
+                        recovery_hint="Check API key and model settings",
+                        cause=e,
+                    )
+                except Exception as e:
+                    raise ModelError(
+                        message=f"Unexpected error: {str(e)}",
+                        context=context,
+                        cause=e,
+                    )
+
+            try:
+                async for chunk in self.retry_handler.retry_generator(
+                    _make_request, context
+                ):
+                    yield chunk
+            except AgentRuntimeError as e:
+                if isinstance(e.cause, ModelError):
+                    yield f"Error: {str(e.cause)} - {e.cause.recovery_hint}"
+                else:
+                    yield f"Error: {str(e)} - {e.recovery_hint}"
+            except Exception as e:
+                error = self._create_model_error(
+                    message=f"Unexpected error: {str(e)}", context=context, cause=e
                 )
-                async for chunk in response:
-                    if chunk.choices[0].delta.content:
-                        yield chunk.choices[0].delta.content
+                yield f"Error: {str(error)} - {error.recovery_hint}"
 
-            async for chunk in self.retry_handler.retry_generator(
-                _make_request, context
-            ):
-                yield chunk
-
-        except OpenAIError as e:
-            error = self._create_model_error(
-                message=f"OpenAI API error: {str(e)}",
-                context=context,
-                cause=e,
-                recovery_hint="Check API key and model settings",
-            )
-            yield f"Error: {str(error)} - {error.recovery_hint}"
         except Exception as e:
             error = self._create_model_error(
                 message=f"Unexpected error: {str(e)}", context=context, cause=e
@@ -121,23 +138,41 @@ class OpenAIProvider(ModelProvider):
             )
 
             async def _make_request():
-                response = await self.client.embeddings.create(
-                    model="text-embedding-ada-002", input=text
+                try:
+                    response = await self.client.embeddings.create(
+                        model="text-embedding-ada-002", input=text
+                    )
+                    return response.data[0].embedding
+                except OpenAIError as e:
+                    raise ModelError(
+                        message=f"OpenAI API error getting embeddings: {str(e)}",
+                        context=context,
+                        recovery_hint="Check API key and model settings",
+                        cause=e,
+                    )
+                except Exception as e:
+                    raise ModelError(
+                        message=f"Unexpected error getting embeddings: {str(e)}",
+                        context=context,
+                        cause=e,
+                    )
+
+            try:
+                return await self.retry_handler.retry(_make_request, context)
+            except AgentRuntimeError as e:
+                if isinstance(e.cause, ModelError):
+                    raise e.cause
+                raise self._create_model_error(
+                    message=f"OpenAI API error getting embeddings: {str(e)}",
+                    context=context,
+                    cause=e,
                 )
-                return response.data[0].embedding
 
-            return await self.retry_handler.retry(_make_request, context)
-
-        except OpenAIError as e:
-            raise self._create_model_error(
-                message=f"OpenAI API error getting embeddings: {str(e)}",
-                context=context,
-                cause=e,
-                recovery_hint="Check API key and model settings",
-            ) from e
         except Exception as e:
+            if isinstance(e, ModelError):
+                raise
             raise self._create_model_error(
                 message=f"Unexpected error getting embeddings: {str(e)}",
                 context=context,
                 cause=e,
-            ) from e
+            )

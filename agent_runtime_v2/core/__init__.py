@@ -24,10 +24,13 @@ def configure_logging():
     logging.basicConfig(level=log_level, format=log_format)
 
     # Configure HTTP request logging
-    if os.getenv("LOG_HTTP_REQUESTS", "false").lower() != "true":
-        # Disable noisy HTTP request logging unless explicitly enabled
-        logging.getLogger("httpx").setLevel(logging.WARNING)
-        logging.getLogger("httpcore").setLevel(logging.WARNING)
+    http_level = (
+        log_level
+        if os.getenv("LOG_HTTP_REQUESTS", "false").lower() == "true"
+        else logging.WARNING
+    )
+    logging.getLogger("httpx").setLevel(http_level)
+    logging.getLogger("httpcore").setLevel(http_level)
 
     # Log initial configuration at debug level
     logger = logging.getLogger(__name__)

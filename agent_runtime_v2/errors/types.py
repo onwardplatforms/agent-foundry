@@ -65,12 +65,14 @@ class ConfigurationError(AgentRuntimeError):
         message: str,
         context: Optional[ErrorContext] = None,
         recovery_hint: Optional[str] = None,
+        cause: Optional[Exception] = None,
     ):
         super().__init__(
             message,
             ErrorSeverity.CRITICAL,
             context,
             recovery_hint or "Check configuration values and format",
+            cause,
         )
 
 
@@ -101,12 +103,14 @@ class PluginError(AgentRuntimeError):
         message: str,
         context: Optional[ErrorContext] = None,
         recovery_hint: Optional[str] = None,
+        cause: Optional[Exception] = None,
     ):
         super().__init__(
             message,
             ErrorSeverity.ERROR,
             context,
             recovery_hint or "Check plugin configuration and dependencies",
+            cause,
         )
 
 
@@ -118,12 +122,14 @@ class ModelError(AgentRuntimeError):
         message: str,
         context: Optional[ErrorContext] = None,
         recovery_hint: Optional[str] = None,
+        cause: Optional[Exception] = None,
     ):
         super().__init__(
             message,
             ErrorSeverity.ERROR,
             context,
             recovery_hint or "Try again or use a different model",
+            cause,
         )
 
 
@@ -135,12 +141,14 @@ class ConversationError(AgentRuntimeError):
         message: str,
         context: Optional[ErrorContext] = None,
         recovery_hint: Optional[str] = None,
+        cause: Optional[Exception] = None,
     ):
         super().__init__(
             message,
             ErrorSeverity.ERROR,
             context,
             recovery_hint or "Try restarting the conversation",
+            cause,
         )
 
 
@@ -152,10 +160,12 @@ class SecurityError(AgentRuntimeError):
         message: str,
         context: Optional[ErrorContext] = None,
         recovery_hint: Optional[str] = None,
+        cause: Optional[Exception] = None,
     ):
         super().__init__(
             message,
             ErrorSeverity.CRITICAL,
             context,
             recovery_hint or "Check security credentials and permissions",
+            cause,
         )
