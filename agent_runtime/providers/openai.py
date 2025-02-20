@@ -12,13 +12,10 @@ from semantic_kernel.connectors.ai.function_choice_behavior import (
 )
 from semantic_kernel.contents import ChatHistory, StreamingChatMessageContent
 from semantic_kernel.kernel import Kernel
-from semantic_kernel.planners import (
-    FunctionCallingStepwisePlanner,
-    FunctionCallingStepwisePlannerOptions,
-)
 
 from agent_runtime.providers.base import OpenAISettings, Provider, ProviderConfig
 from agent_runtime.plugins.manager import PluginManager
+from agent_runtime.planners import PlannerType, get_planner
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +24,7 @@ class OpenAIProvider(Provider):
     """OpenAI provider implementation with function-calling and stepwise planning support."""
 
     def __init__(self, config: ProviderConfig, base_dir: Optional[Path] = None):
-        """
-        Store the base_dir so we can load plugin-based function definitions from
-        the same folder the Agent is using.
-        """
+        """Initialize OpenAI provider with optional base directory for plugins."""
         super().__init__(config)
         if not isinstance(self.settings, OpenAISettings):
             raise ValueError("Invalid settings type for OpenAI provider")
@@ -40,14 +34,8 @@ class OpenAIProvider(Provider):
         self.service_id = "openai"  # Used for both chat and planning
         self.base_dir = base_dir
 
-        # Initialize stepwise planner with default options
-        self.planner_options = FunctionCallingStepwisePlannerOptions(
-            max_iterations=10,
-            max_tokens=4000,
-        )
-        self.planner = FunctionCallingStepwisePlanner(
-            service_id=self.service_id, options=self.planner_options
-        )
+        # Initialize planner
+        self.planner = get_planner(PlannerType.STEPWISE, logger=logger)
 
     async def chat(
         self,
@@ -59,7 +47,6 @@ class OpenAIProvider(Provider):
         Stream a chat response from OpenAI.
         If function definitions are available, attach them to the settings.
         """
-
         # If no kernel is given, create a new one.
         if not kernel:
             kernel = Kernel()
@@ -101,20 +88,30 @@ class OpenAIProvider(Provider):
         goal: str,
         kernel: Optional[Kernel] = None,
     ) -> AsyncIterator[StreamingChatMessageContent]:
-        """
-        Execute tasks using regular chat functionality.
-        This is a simplified version that doesn't try to do complex planning.
-        """
+        """Execute tasks using the configured planner."""
         if not kernel:
             kernel = Kernel()
 
-        # Create a chat history with the goal
-        history = ChatHistory()
-        history.add_system_message(
-            "You are a helpful AI assistant. Please help accomplish the following goal:"
+        # Configure settings for planning
+        settings = OpenAIChatPromptExecutionSettings(
+            temperature=self.settings.temperature,
+            top_p=self.settings.top_p,
+            max_tokens=self.settings.max_tokens,
+            enable_function_calling=True,
         )
-        history.add_user_message(goal)
 
-        # Use regular chat to handle the request
-        async for chunk in self.chat(history, kernel):
-            yield chunk
+        try:
+            # Use our planner to handle the request
+            result = await self.planner.plan_and_execute(goal, kernel, settings)
+
+            # Yield the result as a streaming message
+            yield StreamingChatMessageContent(
+                role="assistant", content=result, choice_index=0
+            )
+        except Exception as e:
+            logger.error(f"Error in plan_and_execute: {str(e)}")
+            yield StreamingChatMessageContent(
+                role="assistant",
+                content=f"Error during planning: {str(e)}",
+                choice_index=0,
+            )
