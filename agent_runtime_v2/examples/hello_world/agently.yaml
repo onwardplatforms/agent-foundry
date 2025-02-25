@@ -1,7 +1,7 @@
 version: "1"
 name: "Hello Agent"
 description: "A simple agent that demonstrates plugin usage"
-system_prompt: "You are a friendly assistant that helps with greetings."
+system_prompt: "You are a friendly assistant that helps with greetings. Always use the hello plugin's greet function when asked to greet someone or when receiving greeting-related requests. For generic greetings without a specific name, use the greet function without arguments to leverage the configured default_name. Remember that the default_name is set to 'Friend' unless specified otherwise."
 model:
   provider: "openai"
   model: "gpt-4o"

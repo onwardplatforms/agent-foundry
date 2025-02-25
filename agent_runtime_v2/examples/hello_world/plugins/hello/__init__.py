@@ -14,7 +14,8 @@ class HelloPlugin(Plugin):
     plugin_instructions = """
     Use this plugin when you need to:
     - Greet someone with a simple hello message
-    - Greet the world if no specific person is mentioned
+    - Greet generically using the configured default_name when no specific person is mentioned
+    - For generic greetings with no target name, use the greet function without arguments to use the default_name
     """
 
     # Define a default_name variable that can be configured
@@ -24,15 +25,20 @@ class HelloPlugin(Plugin):
         default="World",
     )
 
-    @kernel_function(description="Say hello to someone or the world")
+    @kernel_function(
+        description="Greet someone by name, or use the configured default_name if no name is provided"
+    )
     def greet(self, name: Optional[str] = None) -> str:
-        """Greet someone by name, or say Hello to the default name if no name is provided.
+        """Generate a friendly greeting message.
+
+        When no specific name is provided, this will use the configured default_name value.
+        For generic greetings, call this with no arguments to use the default_name.
 
         Args:
-            name: The name of the person to greet (optional)
+            name: The name of the person to greet (optional, uses default_name if not provided)
 
         Returns:
-            A simple greeting
+            A personalized greeting message
         """
         if name:
             return f"Hello, {name}!"

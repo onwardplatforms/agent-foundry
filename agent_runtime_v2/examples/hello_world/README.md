@@ -24,12 +24,43 @@ Run the agent with the CLI:
 python -m agent_runtime_v2.cli.commands run --agent agently.yaml
 ```
 
+Or simply:
+
+```bash
+# From this directory
+agently run
+```
+
 Test just the plugin:
 
 ```bash
 # From this directory
 python test_plugin.py
 ```
+
+## Testing the default_name Variable
+
+To test that the plugin variables are working correctly, try these interactions:
+
+1. For a generic greeting using the default name:
+   ```
+   You> greet me
+   Assistant> Hello, Friend!
+   ```
+
+2. For greeting a specific person:
+   ```
+   You> greet Alice
+   Assistant> Hello, Alice!
+   ```
+
+3. Explicitly verify the default_name variable:
+   ```
+   You> use the greet function with default variables
+   Assistant> Hello, Friend!
+   ```
+
+These interactions confirm that the plugin is correctly using the `default_name` variable set to "Friend" in the YAML configuration.
 
 ## Customizing
 
