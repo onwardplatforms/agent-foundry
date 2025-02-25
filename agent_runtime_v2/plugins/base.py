@@ -51,16 +51,34 @@ class VariableValidation:
         return True, None
 
 
-@dataclass
 class PluginVariable:
     """Configuration variable for a plugin."""
 
-    type: Type = str
-    description: str = ""
-    default: Optional[Any] = None
-    sensitive: bool = False
-    validation: Optional[VariableValidation] = None
-    name: Optional[str] = None  # Set automatically from class attribute name
+    def __init__(
+        self,
+        type: Type = str,
+        description: str = "",
+        default: Optional[Any] = None,
+        sensitive: bool = False,
+        validation: Optional[VariableValidation] = None,
+        name: Optional[str] = None,
+    ):
+        """Initialize a plugin variable.
+
+        Args:
+            type: The expected type of the variable
+            description: Description of the variable
+            default: Default value if not specified
+            sensitive: Whether this variable contains sensitive information
+            validation: Validation rules for the variable
+            name: Name of the variable (set automatically from class attribute name)
+        """
+        self.type = type
+        self.description = description
+        self.default = default
+        self.sensitive = sensitive
+        self.validation = validation
+        self.name = name
 
     def validate(self, value: Any) -> Tuple[bool, Optional[str]]:
         """Validate a value for this variable.
@@ -115,6 +133,18 @@ class PluginVariable:
 
         return True, None
 
+    # Add descriptor methods to make it work as a proper descriptor
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        return obj._values.get(self.name, self.default)
+
+    def __set__(self, obj, value):
+        is_valid, error = self.validate(value)
+        if not is_valid:
+            raise ValueError(f"Invalid value for {self.name}: {error}")
+        obj._values[self.name] = value
+
 
 class Plugin(ABC):
     """Base class for all plugins."""
@@ -131,6 +161,8 @@ class Plugin(ABC):
         """
         # Get all class attributes that are PluginVariables
         self._variables = {}
+        self._values = {}
+
         for name, attr in inspect.getmembers(self.__class__):
             if isinstance(attr, PluginVariable):
                 # Set the name if not already set
@@ -139,7 +171,6 @@ class Plugin(ABC):
                 self._variables[name] = attr
 
         # Validate and set variables
-        self._values = {}
         for name, value in variables.items():
             if name not in self._variables:
                 raise ValueError(f"Unknown variable: {name}")
@@ -159,16 +190,8 @@ class Plugin(ABC):
                 else:
                     raise ValueError(f"Required variable not provided: {name}")
 
-        # Create properties for each variable
-        for name in self._variables:
-            setattr(
-                self.__class__,
-                name,
-                property(
-                    fget=lambda self, _name=name: self._values[_name],
-                    doc=f"Get the value of the {name} variable",
-                ),
-            )
+        # No need to create properties for each variable anymore
+        # The descriptor protocol will handle that
 
     @classmethod
     def get_kernel_functions(cls) -> Dict[str, Any]:
