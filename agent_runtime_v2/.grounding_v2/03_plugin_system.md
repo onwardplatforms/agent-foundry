@@ -1,217 +1,202 @@
 # Plugin System
 
 ## Overview
-The Plugin System provides a flexible and secure way to extend agent capabilities through pluggable components. It manages plugin lifecycle, resource allocation, and integration with the agent runtime.
+The Plugin System provides a flexible way to extend agent capabilities through pluggable components. Plugins can be loaded from either local directories or remote GitHub repositories, allowing for both local development and community sharing.
 
-## Why It's Important
-1. **Extensibility**
-   - Easy addition of new capabilities
-   - Custom functionality integration
-   - Third-party plugin support
+## Core Concepts
 
-2. **Maintainability**
-   - Modular code organization
-   - Isolated testing
-   - Version management
-
-3. **Security**
-   - Controlled resource access
-   - Plugin sandboxing
-   - Security policy enforcement
-
-## Technical Integration
-
-### 1. Plugin Interface
+### 1. Plugin Sources
 
 ```python
-from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
-from dataclasses import dataclass
+@dataclass
+class PluginSource(ABC):
+    @abstractmethod
+    def load(self) -> Type[Plugin]:
+        """Load the plugin class from this source"""
+        pass
 
 @dataclass
-class PluginMetadata:
-    name: str
-    version: str
-    description: str
-    author: str
-    requirements: Dict[str, str]
-    permissions: List[str]
+class LocalPluginSource(PluginSource):
+    path: Path  # Local filesystem path to plugin
 
-class Plugin(ABC):
-    @abstractmethod
-    async def initialize(self, config: Dict[str, Any]) -> None:
-        """Initialize the plugin with configuration"""
+    def load(self) -> Type[Plugin]:
+        # Load plugin from local path
         pass
 
-    @abstractmethod
-    async def execute(
-        self,
-        action: str,
-        params: Dict[str, Any],
-        context: Optional[Dict[str, Any]] = None
-    ) -> Any:
-        """Execute a plugin action"""
-        pass
+@dataclass
+class GitHubPluginSource(PluginSource):
+    repo_url: str          # e.g. "github.com/user/repo"
+    version_tag: str       # e.g. "v1.0.0"
+    plugin_path: str       # Path within repo to plugin
+    cache_dir: Optional[Path] = None
 
-    @abstractmethod
-    async def cleanup(self) -> None:
-        """Cleanup plugin resources"""
-        pass
-
-    @property
-    @abstractmethod
-    def metadata(self) -> PluginMetadata:
-        """Get plugin metadata"""
+    def load(self) -> Type[Plugin]:
+        # Load plugin from GitHub, using cache
         pass
 ```
 
-### 2. Plugin Manager
+### 2. Plugin Base Classes
 
 ```python
-class PluginManager:
-    def __init__(self):
-        self.plugins: Dict[str, Plugin] = {}
-        self.configs: Dict[str, Dict[str, Any]] = {}
+class VariableValidation:
+    def __init__(self,
+                 options: Optional[List[Any]] = None,
+                 range: Optional[Tuple[Optional[Any], Optional[Any]]] = None,
+                 pattern: Optional[str] = None,
+                 error_message: str = None):
+        pass
 
-    async def load_plugin(
-        self,
-        plugin_path: str,
-        config: Optional[Dict[str, Any]] = None
-    ) -> None:
-        # Load plugin module
-        plugin_module = importlib.import_module(plugin_path)
-        plugin_class = getattr(plugin_module, "Plugin")
+class PluginVariable:
+    def __init__(self,
+                 name: Optional[str] = None,  # Inferred from class name if None
+                 type: Type = str,
+                 description: str = "",
+                 default: Optional[Any] = None,
+                 sensitive: bool = False,
+                 validation: Optional[VariableValidation] = None):
+        pass
 
-        # Create plugin instance
-        plugin = plugin_class()
-
-        # Validate metadata and permissions
-        self._validate_plugin(plugin)
-
-        # Initialize plugin
-        await plugin.initialize(config or {})
-
-        # Store plugin
-        self.plugins[plugin.metadata.name] = plugin
-        self.configs[plugin.metadata.name] = config or {}
-
-    async def execute_plugin(
-        self,
-        plugin_name: str,
-        action: str,
-        params: Dict[str, Any],
-        context: Optional[Dict[str, Any]] = None
-    ) -> Any:
-        # Get plugin
-        plugin = self.plugins.get(plugin_name)
-        if not plugin:
-            raise PluginError(f"Plugin {plugin_name} not found")
-
-        # Execute action
-        return await plugin.execute(action, params, context)
+class Plugin:
+    name: str  # Can be inferred from class name
+    description: str
+    plugin_instructions: str  # Plain text instructions for agents
+    variables: List[PluginVariable]
 ```
 
-### 3. Integration Points
+### 3. Plugin Implementation Example
 
-1. **Agent Configuration**
-   ```python
-   @dataclass
-   class AgentConfig:
-       plugins: List[PluginConfig]
-       plugin_policies: Dict[str, SecurityPolicy]
+```python
+class WeatherPlugin(Plugin):
+    name = "weather"
+    description = "Plugin for getting weather information"
+    plugin_instructions = """
+    Use this plugin to get weather information for cities.
+    The temperature will be returned in the configured units.
+    """
+
+    api_key = PluginVariable(
+        type=str,
+        description="API key for weather service",
+        sensitive=True
+    )
+    units = PluginVariable(
+        type=str,
+        default="celsius",
+        validation=VariableValidation(
+            options=["celsius", "fahrenheit"]
+        )
+    )
+
+    @kernel_function(description="Get current weather")
+    def get_weather(self, city: str) -> str:
+        # Implementation using self.api_key and self.units
+        pass
+```
+
+## Key Features
+
+1. **Plugin Sources**
+   - Local directory plugins with direct filesystem access
+   - Remote GitHub plugins with version pinning and caching
+   - Built-in system plugins
+   - Source abstraction allowing future expansion (GitLab, BitBucket, etc.)
+
+2. **Variable System**
+   - Type support including nested types (e.g., List[str])
+   - Optional default values
+   - Built-in validation
+   - Sensitive value handling
+   - Runtime configuration of plugin instances
+
+3. **Function Discovery**
+   - Automatic discovery of @kernel_function decorated methods
+   - Function override priority based on plugin load order
+   - Simple function signatures without dependencies
+
+4. **Plugin Instructions**
+   - Plain text format
+   - Runtime aggregation for agent context
+   - No cross-plugin references
+   - No versioning required for local plugins
+
+## Implementation Guidelines
+
+1. **Plugin Directory Structure**
+   ```
+   plugins/
+   ├── built_in/         # System provided plugins
+   ├── local/            # User's local plugins
+   └── remote/           # Cached remote plugins
    ```
 
-2. **Agent Initialization**
+2. **Plugin Loading**
    ```python
-   class Agent:
-       async def initialize(self) -> None:
-           # Initialize plugin manager
-           self.plugin_manager = PluginManager()
+   # Loading a local plugin
+   agent.load_plugin(
+       LocalPluginSource("./plugins/weather"),
+       variables={
+           "api_key": "123",
+           "units": "fahrenheit"
+       }
+   )
 
-           # Load configured plugins
-           for plugin_config in self.config.plugins:
-               await self.plugin_manager.load_plugin(
-                   plugin_config.source,
-                   plugin_config.config
-               )
+   # Loading a GitHub plugin
+   agent.load_plugin(
+       GitHubPluginSource(
+           repo_url="github.com/weather-org/weather-plugin",
+           version_tag="v1.0.0",
+           plugin_path="weather"
+       ),
+       variables={
+           "api_key": "456",
+           "units": "celsius"
+       }
+   )
    ```
 
-3. **Message Processing**
+3. **Variable Type System**
    ```python
-   class Agent:
-       async def _process_message_internal(
-           self,
-           message: Message,
-           context: ConversationContext
-       ) -> AsyncIterator[str]:
-           # Get available plugin actions
-           plugin_actions = self._get_plugin_actions()
+   # Example of nested type support
+   data_list = PluginVariable(
+       type=List[str],
+       description="List of strings to process"
+   )
 
-           # Add to prompt context
-           prompt_context = self._build_prompt_context(
-               message,
-               plugin_actions=plugin_actions
-           )
-
-           # Process response and execute plugin actions
-           async for action in self._process_response(prompt_context):
-               if action.type == "plugin":
-                   result = await self.plugin_manager.execute_plugin(
-                       action.plugin,
-                       action.name,
-                       action.params,
-                       context=context.to_dict()
-                   )
-                   yield result
+   config_dict = PluginVariable(
+       type=Dict[str, Any],
+       description="Configuration dictionary"
+   )
    ```
 
-### 4. Plugin Types
+## Security Considerations
 
-1. **Tool Plugins**
-   - File operations
-   - Web requests
-   - System commands
+1. **Local Plugins**
+   - Direct filesystem access
+   - No version control needed
+   - User responsible for code safety
 
-2. **Capability Plugins**
-   - Planning
-   - Reasoning
-   - Memory management
+2. **Remote Plugins**
+   - Version pinning required
+   - Code verification recommended
+   - Cached local copies
+   - Isolation between plugin instances
 
-3. **Integration Plugins**
-   - External APIs
-   - Database connections
-   - Service integrations
+## Best Practices
 
-## Implementation Plan
+1. **Plugin Development**
+   - Clear, specific plugin instructions
+   - Meaningful variable descriptions
+   - Appropriate validation rules
+   - Single responsibility principle
 
-### Phase 1: Core System
-1. Implement plugin interface
-2. Create plugin manager
-3. Add basic plugin loading
+2. **Plugin Usage**
+   - Load order consideration for overrides
+   - Careful handling of sensitive variables
+   - Clear documentation of requirements
+   - Proper version pinning for remote plugins
 
-### Phase 2: Security
-1. Add permission system
-2. Implement sandboxing
-3. Create security policies
-
-### Phase 3: Advanced Features
-1. Add plugin discovery
-2. Implement versioning
-3. Add plugin marketplace
-
-## Success Metrics
-
-1. **Technical**
-   - Plugin load time
-   - Execution performance
-   - Resource usage
-
-2. **Developer Experience**
-   - Plugin creation time
-   - Documentation quality
-   - Integration ease
-
-3. **Ecosystem**
-   - Number of plugins
-   - Plugin quality
-   - Community engagement
+3. **Error Handling**
+   - Graceful plugin load failures
+   - Clear validation error messages
+   - Proper cleanup on unload
+   - Cache management for remote plugins

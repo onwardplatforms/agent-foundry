@@ -38,9 +38,7 @@ def test_agent_config() -> AgentConfig:
         name="Test Agent",
         description="Test agent for unit tests",
         system_prompt="You are a test assistant",
-        model=ModelConfig(
-            provider="openai", model_name="gpt-4", settings={"temperature": 0.7}
-        ),
+        model=ModelConfig(provider="openai", model="gpt-4o", temperature=0.7),
     )
 
 

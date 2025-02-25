@@ -1,6 +1,9 @@
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 from pathlib import Path
+import logging
+
+from ..utils.logging import LogLevel
 
 
 @dataclass
@@ -8,17 +11,20 @@ class ModelConfig:
     """Configuration for a model provider"""
 
     provider: str
-    model_name: str
-    settings: Dict[str, Any] = field(default_factory=dict)
+    model: str
+    temperature: float = 0.7
+    max_tokens: Optional[int] = None
+    top_p: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    presence_penalty: Optional[float] = None
 
 
 @dataclass
 class PluginConfig:
     """Configuration for a plugin"""
 
-    name: str
-    source: str
-    config: Dict[str, Any] = field(default_factory=dict)
+    source: Any  # Can be LocalPluginSource or other source types
+    variables: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -40,6 +46,7 @@ class AgentConfig:
     model: ModelConfig
     plugins: List[PluginConfig] = field(default_factory=list)
     capabilities: List[CapabilityConfig] = field(default_factory=list)
+    log_level: int = LogLevel.NONE  # Default to no logging
 
 
 @dataclass

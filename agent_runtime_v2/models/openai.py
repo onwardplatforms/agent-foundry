@@ -10,7 +10,14 @@ This module provides integration with OpenAI's API, including:
 import os
 from typing import AsyncIterator, Optional
 from semantic_kernel.contents import ChatHistory
-from openai import AsyncOpenAI, OpenAIError
+from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
+from semantic_kernel.connectors.ai.open_ai.prompt_execution_settings.open_ai_prompt_execution_settings import (
+    OpenAIChatPromptExecutionSettings,
+)
+from semantic_kernel.connectors.ai.function_choice_behavior import (
+    FunctionChoiceBehavior,
+)
+from semantic_kernel import Kernel
 
 from .base import ModelProvider
 from ..config.types import ModelConfig
@@ -47,13 +54,20 @@ class OpenAIProvider(ModelProvider):
                 ),
                 recovery_hint="Set OPENAI_API_KEY environment variable",
             )
-        self.client = AsyncOpenAI(api_key=api_key)
+        self.client = OpenAIChatCompletion(
+            ai_model_id=self.config.model,
+            api_key=api_key,
+        )
+        self.service_id = "openai"
 
-    async def chat(self, history: ChatHistory, **kwargs) -> AsyncIterator[str]:
+    async def chat(
+        self, history: ChatHistory, kernel: Optional[Kernel] = None, **kwargs
+    ) -> AsyncIterator[str]:
         """Process a chat message using OpenAI's streaming API.
 
         Args:
             history: Chat history to use for context
+            kernel: Optional kernel instance for function calling
             **kwargs: Additional arguments to pass to the API
 
         Yields:
@@ -65,54 +79,48 @@ class OpenAIProvider(ModelProvider):
         try:
             context = await self._handle_api_call(
                 "chat_completion",
-                model=self.config.model_name,
+                model=self.config.model,
                 messages=history.messages,
             )
 
-            messages = []
-            for msg in history.messages:
-                messages.append({"role": msg.role, "content": msg.content})
+            # Build settings dictionary from config
+            settings = OpenAIChatPromptExecutionSettings(
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens,
+                top_p=self.config.top_p,
+                frequency_penalty=self.config.frequency_penalty,
+                presence_penalty=self.config.presence_penalty,
+                function_choice_behavior=FunctionChoiceBehavior.Auto(),
+            )
 
-            async def _make_request():
-                try:
-                    response = await self.client.chat.completions.create(
-                        model=self.config.model_name,
-                        messages=messages,
-                        stream=True,
-                        **self.config.settings,
-                    )
-                    async for chunk in response:
-                        if chunk.choices[0].delta.content:
-                            yield chunk.choices[0].delta.content
-                except OpenAIError as e:
-                    raise ModelError(
-                        message=f"OpenAI API error: {str(e)}",
-                        context=context,
-                        recovery_hint="Check API key and model settings",
-                        cause=e,
-                    )
-                except Exception as e:
-                    raise ModelError(
-                        message=f"Unexpected error: {str(e)}",
-                        context=context,
-                        cause=e,
-                    )
+            # Add function definitions if kernel is provided
+            if kernel:
+                from ..plugins import PluginManager
+
+                plugin_manager = PluginManager()
+                plugin_manager.plugins = {
+                    name: (None, plugin) for name, plugin in kernel.plugins.items()
+                }
+                functions = plugin_manager.get_openai_functions()
+                settings.tools = functions.get("functions", [])
+                settings.tool_choice = functions.get("function_call", "auto")
 
             try:
-                async for chunk in self.retry_handler.retry_generator(
-                    _make_request, context
+                async for chunk in self.client.get_streaming_chat_message_content(
+                    chat_history=history,
+                    settings=settings,
+                    kernel=kernel,
                 ):
-                    yield chunk
-            except AgentRuntimeError as e:
-                if isinstance(e.cause, ModelError):
-                    yield f"Error: {str(e.cause)} - {e.cause.recovery_hint}"
-                else:
-                    yield f"Error: {str(e)} - {e.recovery_hint}"
+                    if chunk.content:
+                        yield chunk.content
+
             except Exception as e:
-                error = self._create_model_error(
-                    message=f"Unexpected error: {str(e)}", context=context, cause=e
+                raise ModelError(
+                    message=f"OpenAI API error: {str(e)}",
+                    context=context,
+                    recovery_hint="Check API key and model settings",
+                    cause=e,
                 )
-                yield f"Error: {str(error)} - {error.recovery_hint}"
 
         except Exception as e:
             error = self._create_model_error(
@@ -143,17 +151,11 @@ class OpenAIProvider(ModelProvider):
                         model="text-embedding-ada-002", input=text
                     )
                     return response.data[0].embedding
-                except OpenAIError as e:
+                except Exception as e:
                     raise ModelError(
                         message=f"OpenAI API error getting embeddings: {str(e)}",
                         context=context,
                         recovery_hint="Check API key and model settings",
-                        cause=e,
-                    )
-                except Exception as e:
-                    raise ModelError(
-                        message=f"Unexpected error getting embeddings: {str(e)}",
-                        context=context,
                         cause=e,
                     )
 
