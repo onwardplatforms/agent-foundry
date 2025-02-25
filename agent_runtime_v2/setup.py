@@ -8,6 +8,9 @@ setup(
         "semantic-kernel>=0.9.0",
         "openai>=1.0.0",
         "python-dotenv>=1.0.0",
+        "click",
+        "pyyaml",
+        "jsonschema",
     ],
     extras_require={
         "test": [
@@ -16,5 +19,10 @@ setup(
             "pytest-cov>=4.0.0",
             "pytest-mock>=3.10.0",
         ]
+    },
+    entry_points={
+        "console_scripts": [
+            "agently=agent_runtime_v2.cli:cli",
+        ],
     },
 )

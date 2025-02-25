@@ -26,6 +26,7 @@ setup(
     entry_points={
         "console_scripts": [
             "odk=agent_foundry.cli.cli:cli",
+            "agently=agent_runtime_v2.cli:cli",
         ],
     },
 )

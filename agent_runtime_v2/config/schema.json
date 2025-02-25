@@ -1,0 +1,180 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Agently Agent Configuration",
+    "type": "object",
+    "required": [
+        "version",
+        "name",
+        "system_prompt",
+        "model"
+    ],
+    "properties": {
+        "version": {
+            "type": "string",
+            "enum": [
+                "1"
+            ],
+            "description": "Configuration format version"
+        },
+        "name": {
+            "type": "string",
+            "description": "Name of the agent"
+        },
+        "description": {
+            "type": "string",
+            "description": "Description of the agent's purpose and capabilities"
+        },
+        "system_prompt": {
+            "type": "string",
+            "description": "System prompt that defines the agent's behavior"
+        },
+        "model": {
+            "type": "object",
+            "required": [
+                "provider",
+                "model"
+            ],
+            "properties": {
+                "provider": {
+                    "type": "string",
+                    "description": "Model provider (e.g., openai, anthropic)"
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Model name/version"
+                },
+                "temperature": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "default": 0.7,
+                    "description": "Temperature for response generation"
+                },
+                "max_tokens": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "description": "Maximum tokens in response (null for no limit)"
+                },
+                "top_p": {
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "Top-p sampling parameter"
+                },
+                "frequency_penalty": {
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "description": "Penalty for token frequency"
+                },
+                "presence_penalty": {
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "description": "Penalty for token presence"
+                }
+            }
+        },
+        "plugins": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "source"
+                ],
+                "properties": {
+                    "source": {
+                        "type": "object",
+                        "required": [
+                            "type"
+                        ],
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": [
+                                    "local",
+                                    "github"
+                                ],
+                                "description": "Plugin source type"
+                            },
+                            "path": {
+                                "type": "string",
+                                "description": "Path to plugin (for local plugins)"
+                            },
+                            "repo": {
+                                "type": "string",
+                                "description": "GitHub repository (for github plugins)"
+                            },
+                            "version": {
+                                "type": "string",
+                                "description": "Version tag (for github plugins)"
+                            },
+                            "plugin_path": {
+                                "type": "string",
+                                "description": "Path within the repository (for github plugins)"
+                            }
+                        },
+                        "allOf": [
+                            {
+                                "if": {
+                                    "properties": {
+                                        "type": {
+                                            "enum": [
+                                                "local"
+                                            ]
+                                        }
+                                    }
+                                },
+                                "then": {
+                                    "required": [
+                                        "path"
+                                    ]
+                                }
+                            },
+                            {
+                                "if": {
+                                    "properties": {
+                                        "type": {
+                                            "enum": [
+                                                "github"
+                                            ]
+                                        }
+                                    }
+                                },
+                                "then": {
+                                    "required": [
+                                        "repo",
+                                        "version",
+                                        "plugin_path"
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                    "variables": {
+                        "type": "object",
+                        "description": "Variables to pass to the plugin"
+                    }
+                }
+            }
+        },
+        "features": {
+            "type": "object",
+            "description": "Agent features configuration"
+        },
+        "env": {
+            "type": "object",
+            "description": "Environment variables for this agent",
+            "additionalProperties": {
+                "type": "string"
+            }
+        }
+    }
+}

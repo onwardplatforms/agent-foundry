@@ -1,0 +1,16 @@
+version: "1"
+name: "Hello Agent"
+description: "A simple agent that demonstrates plugin usage"
+system_prompt: "You are a friendly assistant that helps with greetings."
+model:
+  provider: "openai"
+  model: "gpt-4o"
+  temperature: 0.7
+plugins:
+  - source:
+      type: "local"
+      path: "./plugins/hello"
+    variables:
+      default_name: "Friend"
+env:
+  OPENAI_API_KEY: ${{ env.OPENAI_API_KEY }}
